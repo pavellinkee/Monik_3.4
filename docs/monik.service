@@ -1,0 +1,55 @@
+# Monik — DEX arbitrage scanner.
+#
+# Юнит намеренно не содержит номера версии: он указывает на символическую
+# ссылку current, а она — на каталог текущего состояния. Переход на новую
+# версию и откат выполняются переносом ссылки, системный файл при этом не
+# редактируется:
+#
+#   ln -sfn monik_3.5 /home/ubuntu/claude_monik/current
+#   sudo systemctl restart monik
+#
+# Версию приложение определяет по имени каталога, на который ведёт ссылка,
+# и сообщает её в логах, /status и уведомлениях.
+
+[Unit]
+Description=Monik DEX Arbitrage Scanner
+After=network-online.target
+Wants=network-online.target
+
+# Защита от бесконечного цикла перезапуска (24_DEPLOYMENT.md §27-28).
+# Пять неудачных стартов за пять минут — и systemd прекращает попытки,
+# оставляя службу в состоянии failed. Временный сбой сети по-прежнему
+# приводит к подъёму; неисправная конфигурация перестаёт молотить вхолостую.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ubuntu
+
+# Секреты читает systemd от имени root и передаёт процессу уже готовым
+# окружением. Файл остаётся доступным только root: права не ослабляются,
+# значения в командную строку не попадают (24_DEPLOYMENT.md §57).
+EnvironmentFile=/etc/monik/monik.env
+Environment="MONIK__APPLICATION__ENVIRONMENT=production"
+
+WorkingDirectory=/home/ubuntu/claude_monik/current
+# Запуск напрямую из окружения версии: без посредника, который при каждом
+# старте сверяет зависимости и может обратиться в сеть.
+ExecStart=/home/ubuntu/claude_monik/current/.venv/bin/monik --config /home/ubuntu/claude_monik/current/config/config.yaml
+
+Restart=always
+RestartSec=10
+
+# Приложению нужно время на корректное завершение: остановить планировщик,
+# дописать транзакции и закрыть базу (24_DEPLOYMENT.md §29).
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+SyslogIdentifier=monik
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
