@@ -13,7 +13,9 @@ import json
 import logging
 import sys
 from collections.abc import Mapping
+from datetime import UTC, datetime, tzinfo
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from monik.domain.errors.base import MonikError
 from monik.services.observability.context import current_context
@@ -64,6 +66,20 @@ def log_fields(**fields: Any) -> dict[str, Any]:
     return {_FIELDS_KEY: fields}
 
 
+def _resolve_timezone(name: str | None) -> tzinfo | None:
+    """Пояс по имени IANA; при неизвестном имени — UTC.
+
+    Неизвестный пояс не должен мешать запуску: логи важнее косметики
+    времени, поэтому вместо отказа применяется UTC.
+    """
+    if not name:
+        return None
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return None
+
+
 class StructuredFormatter(logging.Formatter):
     """Форматирует запись как одну строку JSON.
 
@@ -72,9 +88,31 @@ class StructuredFormatter(logging.Formatter):
     ни через текст исключения.
     """
 
-    def __init__(self, *, registry: SecretRegistry | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        registry: SecretRegistry | None = None,
+        timezone: tzinfo | None = None,
+    ) -> None:
         super().__init__()
         self._registry = registry
+        self._timezone = timezone
+
+    def formatTime(  # noqa: N802 - имя задано logging.Formatter
+        self, record: logging.LogRecord, datefmt: str | None = None
+    ) -> str:
+        """Отметка времени записи в настроенном часовом поясе.
+
+        Смещение остаётся в строке всегда, поэтому запись однозначна и
+        при переходе на зимнее время: требование
+        ``28_OBSERVABILITY.md`` §7 о timezone-aware отметках сохранено.
+        Сам пояс задаётся конфигурацией — оператор читает логи в том же
+        времени, в котором работает.
+        """
+        moment = datetime.fromtimestamp(record.created, tz=UTC)
+        if self._timezone is not None:
+            moment = moment.astimezone(self._timezone)
+        return moment.strftime(datefmt or "%Y-%m-%dT%H:%M:%S%z")
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
@@ -127,14 +165,20 @@ def configure_logging(
     level: str = "INFO",
     stream: Any = None,
     registry: SecretRegistry | None = None,
+    timezone: str | None = None,
 ) -> None:
     """Настроить корневой логгер приложения.
 
     Настройка централизована (``25_PROJECT_STRUCTURE.md`` §76): подсистемы
     получают логгер через :func:`get_logger` и не конфигурируют вывод сами.
+
+    ``timezone`` — IANA-пояс отметок времени. Без него отметки остаются в
+    UTC. Смещение печатается в любом случае, поэтому запись однозначна.
     """
     handler = logging.StreamHandler(stream if stream is not None else sys.stderr)
-    handler.setFormatter(StructuredFormatter(registry=registry))
+    handler.setFormatter(
+        StructuredFormatter(registry=registry, timezone=_resolve_timezone(timezone))
+    )
 
     root = logging.getLogger("monik")
     for existing in list(root.handlers):

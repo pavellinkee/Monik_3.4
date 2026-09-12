@@ -77,7 +77,11 @@ async def _run(
 ) -> int:
     """Загрузить конфигурацию и выполнить жизненный цикл приложения."""
     loaded = load_configuration(config_path, registry=secret_registry)
-    configure_logging(level=loaded.config.logging.level.value, registry=secret_registry)
+    configure_logging(
+        level=loaded.config.logging.level.value,
+        registry=secret_registry,
+        timezone=loaded.config.application.timezone,
+    )
     environment = loaded.config.application.environment
     if environment_file is not None and environment_file.found:
         # Путь и число имён — не секреты; значения не логируются.
