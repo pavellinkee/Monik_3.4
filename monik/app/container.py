@@ -110,6 +110,7 @@ from monik.services.registries import (
     TokenRegistry,
 )
 from monik.services.resources import ResourceLimits, ResourceManager
+from monik.services.updates import AptSystemUpdater, SystemUpdater
 
 __all__ = ["Container", "Repositories", "build_container"]
 
@@ -168,6 +169,9 @@ class Container:
     system_notifier: SystemNotifier | None = None
     control: ScannerSwitch = field(default_factory=ScannerSwitch)
     backups: BackupService | None = None
+    #: Установка системных обновлений по команде оператора. ``None``
+    #: означает, что приложение её не выполняет.
+    updater: SystemUpdater | None = None
 
     async def aclose(self) -> None:
         """Освободить внешние ресурсы."""
@@ -331,6 +335,7 @@ def build_container(
     backups = BackupService(
         config.database, database=database, clock=clock, state=repositories.metadata
     )
+    updater = AptSystemUpdater()
     commands = _build_commands(
         loaded,
         repositories=repositories,
@@ -342,6 +347,7 @@ def build_container(
         metrics=registry,
         control=control,
         backups=backups,
+        updater=updater,
     )
     system_notifier = _build_system_notifier(
         loaded, telegram=telegram, repositories=repositories, clock=clock
@@ -377,6 +383,7 @@ def build_container(
         system_notifier=system_notifier,
         control=control,
         backups=backups,
+        updater=updater,
     )
 
 
@@ -775,6 +782,7 @@ def _build_commands(
     metrics: MetricsRegistry,
     control: ScannerSwitch,
     backups: BackupService,
+    updater: SystemUpdater,
 ) -> CommandService | None:
     """Входящий канал команд, если он включён конфигурацией."""
     config = loaded.config.notifications.telegram
@@ -792,6 +800,7 @@ def _build_commands(
         scans=repositories.scans,
         control=control,
         backups=_BackupStatusSource(backups),
+        updater=updater,
         application=version_label(),
         environment=loaded.config.application.environment.value,
     )

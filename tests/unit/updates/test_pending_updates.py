@@ -38,7 +38,7 @@ class TestParsing:
 
     def test_description_is_readable(self) -> None:
         update = PendingUpdate(name="curl", current_version="8.5.0", available_version="8.5.1")
-        assert update.describe() == "curl: 8.5.0 → 8.5.1"
+        assert update.describe().startswith("curl: 8.5.0 → 8.5.1\n")
 
 
 class _Source:
@@ -60,9 +60,17 @@ class _Notifier:
 
     def __init__(self) -> None:
         self.calls: list[tuple[tuple[str, ...], str]] = []
+        self.actions: list[str | None] = []
 
-    async def notify_pending_updates(self, updates: tuple[str, ...], *, apply_command: str) -> bool:
+    async def notify_pending_updates(
+        self,
+        updates: tuple[str, ...],
+        *,
+        apply_command: str,
+        apply_action: str | None = None,
+    ) -> bool:
         self.calls.append((updates, apply_command))
+        self.actions.append(apply_action)
         return True
 
 
@@ -104,6 +112,15 @@ class TestAptSource:
         source = AptPendingUpdates(command=("false",))
         with pytest.raises(ProviderError, match="package manager"):
             await source.pending()
+
+    async def test_apply_action_reaches_notifier(self) -> None:
+        """Кнопка установки должна дойти до сообщения без изменений."""
+        source = _Source((PendingUpdate(name="curl", available_version="8.5.1"),))
+        notifier = _Notifier()
+
+        await UpdateWatcher(source, notifier, apply_action="do:update").check()
+
+        assert notifier.actions == ["do:update"]
 
     async def test_output_is_parsed_end_to_end(self) -> None:
         source = AptPendingUpdates(command=("printf", REAL_OUTPUT))

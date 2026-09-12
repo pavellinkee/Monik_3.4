@@ -28,8 +28,20 @@ class PendingUpdatesNotifier(Protocol):
     уведомлений: ей нужен ровно один метод.
     """
 
-    async def notify_pending_updates(self, updates: tuple[str, ...], *, apply_command: str) -> bool:
-        """Сообщить оператору о доступных обновлениях."""
+    async def notify_pending_updates(
+        self,
+        updates: tuple[str, ...],
+        *,
+        apply_command: str,
+        apply_action: str | None = None,
+    ) -> bool:
+        """Сообщить оператору о доступных обновлениях.
+
+        ``apply_action`` описывает действие, которым обновления можно
+        применить не выходя из сообщения. Что это за действие, подсистема
+        обновлений не знает: она получает его готовым от того, кто
+        собирает приложение, и передаёт дальше.
+        """
         ...
 
 
@@ -40,10 +52,15 @@ class UpdateWatcher:
     """Проверяет доступные обновления и сообщает о них оператору."""
 
     def __init__(
-        self, source: PendingUpdatesSource, notifier: PendingUpdatesNotifier | None
+        self,
+        source: PendingUpdatesSource,
+        notifier: PendingUpdatesNotifier | None,
+        *,
+        apply_action: str | None = None,
     ) -> None:
         self._source = source
         self._notifier = notifier
+        self._apply_action = apply_action
 
     async def check(self) -> int:
         """Проверить обновления и сообщить о них. Возвращает их число.
@@ -73,5 +90,6 @@ class UpdateWatcher:
             await self._notifier.notify_pending_updates(
                 tuple(update.describe() for update in updates),
                 apply_command=self._source.apply_command,
+                apply_action=self._apply_action,
             )
         return len(updates)

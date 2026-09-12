@@ -27,6 +27,7 @@ from monik.services.commands import (
     parse_command,
 )
 from monik.services.commands.parser import action_callback_data, confirm_callback_data
+from monik.services.updates.ports import SystemUpdateResult
 from tests import factories as f
 
 from .test_commands import StaticStats, StaticStatus
@@ -106,6 +107,25 @@ class StaticBackups:
         return self._status
 
 
+class StaticUpdater:
+    """Установка обновлений с заданным исходом."""
+
+    def __init__(self, *, applied: bool = True, packages: int | None = 2) -> None:
+        self._result = SystemUpdateResult(
+            applied=applied,
+            detail="обновления установлены" if applied else "нет права выполнять установку",
+            packages=packages if applied else None,
+        )
+        self.calls = 0
+
+    async def available(self) -> bool:
+        return True
+
+    async def apply(self) -> SystemUpdateResult:
+        self.calls += 1
+        return self._result
+
+
 def build_router(database: Database, **overrides: object) -> CommandRouter:
     return CommandRouter(
         jobs=SqliteJobRepository(database),
@@ -116,6 +136,7 @@ def build_router(database: Database, **overrides: object) -> CommandRouter:
         scans=overrides.get("scans", StaticScans()),  # type: ignore[arg-type]
         control=overrides.get("control", ScannerSwitch()),  # type: ignore[arg-type]
         backups=overrides.get("backups", StaticBackups()),  # type: ignore[arg-type]
+        updater=overrides.get("updater", StaticUpdater()),  # type: ignore[arg-type]
         application=overrides.get("application", "Monik 3.2.0"),  # type: ignore[arg-type]
         environment=overrides.get("environment", "production"),  # type: ignore[arg-type]
     )
@@ -361,3 +382,50 @@ async def test_no_command_reveals_secrets(database: Database) -> None:
         assert secret not in joined
     for marker in ("api_key", "api key", "token", "MONIK_", "private"):
         assert marker.lower() not in joined.lower()
+
+
+async def test_system_update_is_applied_only_after_confirmation(database: Database) -> None:
+    """Кнопка обновления опасна так же, как остановка: сначала вопрос."""
+    updater = StaticUpdater()
+    control = ScannerSwitch()
+    router = build_router(database, updater=updater, control=control)
+
+    prompt = await router.handle_callback(action_callback_data(CommandName.SYSTEM_UPDATE))
+    assert updater.calls == 0
+    assert not control.restart_requested
+    assert prompt.buttons
+
+    response = await router.handle_callback(confirm_callback_data(CommandName.SYSTEM_UPDATE))
+
+    assert updater.calls == 1
+    assert control.restart_requested
+    assert "установлены" in response.text
+
+
+async def test_failed_update_does_not_restart_the_scanner(database: Database) -> None:
+    """Перезапуск после неудачной установки только теряет цикл."""
+    updater = StaticUpdater(applied=False)
+    control = ScannerSwitch()
+    router = build_router(database, updater=updater, control=control)
+
+    response = await router.handle_callback(confirm_callback_data(CommandName.SYSTEM_UPDATE))
+
+    assert not control.restart_requested
+    assert "не удалось" in response.text
+
+
+async def test_update_is_reported_as_unavailable_without_the_port(database: Database) -> None:
+    router = build_router(database, updater=None)
+
+    response = await router.handle_callback(confirm_callback_data(CommandName.SYSTEM_UPDATE))
+
+    assert not response.handled
+
+
+async def test_text_command_also_asks_for_confirmation(database: Database) -> None:
+    updater = StaticUpdater()
+    router = build_router(database, updater=updater)
+
+    await router.handle_text("/update")
+
+    assert updater.calls == 0

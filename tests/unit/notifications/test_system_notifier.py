@@ -455,3 +455,42 @@ class TestScannerStopNotification:
         assert not await notifier.notify_scanner_stopped(ScannerStopReason.SHUTDOWN)
 
         assert transport.attempts == 1
+
+
+class TestPendingUpdates:
+    """Сообщение о доступных обновлениях и кнопка установки."""
+
+    async def test_updates_are_listed_with_the_manual_command(self) -> None:
+        transport = FakeTransport()
+        notifier = _notifier(transport, FakeClock(f.NOW))
+
+        assert await notifier.notify_pending_updates(
+            ("openssl: 3.0.13 → 3.0.14",), apply_command="sudo apt upgrade"
+        )
+
+        message = transport.sent[0]
+        assert "openssl" in message.text
+        assert "sudo apt upgrade" in message.text
+        assert message.buttons == ()
+
+    async def test_button_appears_only_when_the_action_is_available(self) -> None:
+        """Кнопка, которая заведомо не сработает, хуже её отсутствия."""
+        transport = FakeTransport()
+        notifier = _notifier(transport, FakeClock(f.NOW))
+
+        await notifier.notify_pending_updates(
+            ("openssl: 3.0.13 → 3.0.14",),
+            apply_command="sudo apt upgrade",
+            apply_action="do:update",
+        )
+
+        button = transport.sent[0].buttons[0][0]
+        assert button.callback_data == "do:update"
+        assert button.label
+
+    async def test_empty_list_sends_nothing(self) -> None:
+        transport = FakeTransport()
+        notifier = _notifier(transport, FakeClock(f.NOW))
+
+        assert not await notifier.notify_pending_updates((), apply_command="sudo apt upgrade")
+        assert transport.sent == []

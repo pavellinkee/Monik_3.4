@@ -17,7 +17,7 @@ import asyncio
 import re
 from collections.abc import Sequence
 
-from monik.domain.errors import ProviderError
+from monik.domain.errors import MonikError, ProviderError
 from monik.services.updates.ports import PendingUpdate
 
 __all__ = ["AptPendingUpdates"]
@@ -30,6 +30,16 @@ _LINE = re.compile(
     r"^(?P<name>[^/\s]+)/(?P<origin>\S+)\s+(?P<available>\S+)\s+\S+"
     r"(?:\s+\[upgradable from:\s*(?P<current>[^\]]+)\])?\s*$"
 )
+
+#: Команда получения сведений о пакетах, включая раздел.
+_SECTION_COMMAND: tuple[str, ...] = ("apt-cache", "show", "--no-all-versions")
+
+#: Строка раздела в выводе ``apt-cache show``.
+_SECTION_LINE = re.compile(r"^Section:\s*(?P<section>\S+)\s*$")
+
+#: Строка имени пакета в выводе ``apt-cache show``.
+_PACKAGE_LINE = re.compile(r"^Package:\s*(?P<name>\S+)\s*$")
+
 
 #: Признак источника обновлений безопасности в имени репозитория.
 _SECURITY = "-security"
@@ -49,12 +59,33 @@ class AptPendingUpdates:
 
     async def pending(self) -> tuple[PendingUpdate, ...]:
         """Доступные, но не установленные обновления."""
-        output = await self._run()
-        return tuple(update for line in output.splitlines() if (update := _parse(line)) is not None)
+        output = await self._run(self._command)
+        updates = tuple(
+            update for line in output.splitlines() if (update := _parse(line)) is not None
+        )
+        return await self._with_sections(updates)
 
-    async def _run(self) -> str:
+    async def _with_sections(self, updates: tuple[PendingUpdate, ...]) -> tuple[PendingUpdate, ...]:
+        """Дополнить раздел пакета: по нему строится русское пояснение.
+
+        Раздел запрашивается одной командой на все пакеты, а не по
+        одному. Неудача здесь не отменяет уведомление: без раздела
+        пояснение станет общим, но список останется полезным.
+        """
+        if not updates:
+            return updates
+        try:
+            output = await self._run((*_SECTION_COMMAND, *(u.name for u in updates)))
+        except MonikError:
+            return updates
+        sections = _parse_sections(output)
+        return tuple(
+            update.model_copy(update={"section": sections.get(update.name)}) for update in updates
+        )
+
+    async def _run(self, command: tuple[str, ...]) -> str:
         process = await asyncio.create_subprocess_exec(
-            *self._command,
+            *command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
@@ -75,6 +106,21 @@ class AptPendingUpdates:
                 code="updates_check_failed",
             )
         return stdout.decode("utf-8", errors="replace")
+
+
+def _parse_sections(output: str) -> dict[str, str]:
+    """Разделы пакетов из вывода ``apt-cache show``."""
+    sections: dict[str, str] = {}
+    name: str | None = None
+    for line in output.splitlines():
+        package = _PACKAGE_LINE.match(line)
+        if package is not None:
+            name = package.group("name")
+            continue
+        section = _SECTION_LINE.match(line)
+        if section is not None and name is not None:
+            sections.setdefault(name, section.group("section"))
+    return sections
 
 
 def _parse(line: str) -> PendingUpdate | None:

@@ -48,6 +48,7 @@ from monik.services.commands.ports import (
 )
 from monik.services.notifications.ports import MessageButton
 from monik.services.observability.logging import get_logger, log_fields
+from monik.services.updates.ports import SystemUpdater
 
 __all__ = ["COMMAND_HELP", "CommandResponse", "CommandRouter"]
 
@@ -77,6 +78,10 @@ COMMAND_HELP: tuple[tuple[CommandName, str], ...] = (
     (CommandName.START_SCANNER, "разрешить сканирование"),
     (CommandName.STOP_SCANNER, "остановить сканирование (с подтверждением)"),
     (CommandName.RESTART, "перезапустить приложение (с подтверждением)"),
+    (
+        CommandName.SYSTEM_UPDATE,
+        "установить обновления системы и перезапустить приложение (с подтверждением)",
+    ),
 )
 
 #: Подписи кнопок меню.
@@ -91,6 +96,7 @@ _BUTTON_LABELS: dict[CommandName, str] = {
     CommandName.SCANS: "🕔 Последние сканы",
     CommandName.BACKUP: "💾 Резервные копии",
     CommandName.HELP: "❓ Помощь",
+    CommandName.SYSTEM_UPDATE: "⬇️ Обновить и перезапустить",
 }
 
 #: Человекочитаемое состояние сканера.
@@ -109,6 +115,11 @@ _CONFIRMATION_PROMPTS: dict[CommandName, str] = {
     ),
     CommandName.RESTART: (
         "Перезапустить приложение?\nТекущий цикл будет корректно завершён, процесс перезапустится."
+    ),
+    CommandName.SYSTEM_UPDATE: (
+        "Установить обновления системы и перезапустить Monik?\n"
+        "Установка займёт несколько минут, всё это время сканер не отвечает на команды. "
+        "После установки приложение перезапустится само."
     ),
 }
 
@@ -136,6 +147,7 @@ class CommandRouter:
         scans: ScanReader | None = None,
         control: ScannerControl | None = None,
         backups: BackupStatusSource | None = None,
+        updater: SystemUpdater | None = None,
         application: str | None = None,
         environment: str | None = None,
     ) -> None:
@@ -147,6 +159,7 @@ class CommandRouter:
         self._scans = scans
         self._control = control
         self._backups = backups
+        self._updater = updater
         self._application = application
         self._environment = environment
 
@@ -199,6 +212,8 @@ class CommandRouter:
             return await self._scans_response()
         if command.name is CommandName.BACKUP:
             return await self._backup_response()
+        if command.name is CommandName.SYSTEM_UPDATE:
+            return await self._system_update_response()
         if command.name in {
             CommandName.START_SCANNER,
             CommandName.STOP_SCANNER,
@@ -221,6 +236,43 @@ class CommandRouter:
                     ),
                 ),
             ),
+        )
+
+    async def _system_update_response(self) -> CommandResponse:
+        """Установить обновления системы и перезапустить приложение.
+
+        Перезапуск запрашивается только после удачной установки: если
+        поставить не удалось, перезапуск ничего не изменит, а сканер
+        потеряет текущий цикл напрасно.
+
+        Ответ формируется до запроса перезапуска, поэтому оператор
+        узнаёт результат даже тогда, когда процесс завершится сразу.
+        """
+        if self._updater is None:
+            return CommandResponse(text="обновление системы недоступно", handled=False)
+        result = await self._updater.apply()
+        if not result.applied:
+            _LOGGER.warning(
+                "system update command failed",
+                extra=log_fields(detail=result.detail),
+            )
+            return CommandResponse(
+                text=f"⚠️ Обновить не удалось: {result.detail}",
+                buttons=self._menu_buttons(),
+            )
+        packages = "" if result.packages is None else f" Обновлено пакетов: {result.packages}."
+        _LOGGER.warning(
+            "system update command executed",
+            extra=log_fields(operation=CommandName.SYSTEM_UPDATE.value, packages=result.packages),
+        )
+        if self._control is None:
+            return CommandResponse(
+                text=f"✅ Обновления установлены.{packages} Перезапустите приложение вручную.",
+                buttons=self._menu_buttons(),
+            )
+        self._control.request_restart()
+        return CommandResponse(
+            text=f"✅ Обновления установлены.{packages} Приложение перезапускается.",
         )
 
     def _control_response(self, command: CommandName) -> CommandResponse:
@@ -282,7 +334,7 @@ class CommandRouter:
         lines = ["Команды Monik:"]
         lines.extend(f"/{command.value} — {purpose}" for command, purpose in COMMAND_HELP)
         lines.append("")
-        lines.append("Остановка и перезапуск запрашивают подтверждение.")
+        lines.append("Остановка, перезапуск и обновление системы запрашивают подтверждение.")
         return CommandResponse(text="\n".join(lines), buttons=self._menu_buttons())
 
     async def _details(self, raw_k_id: str) -> CommandResponse:

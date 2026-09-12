@@ -69,6 +69,8 @@ class CommandName(StrEnum):
     STATS = "stats"
     #: Состояние резервного копирования.
     BACKUP = "backup"
+    #: Установить обновления системы и перезапустить приложение.
+    SYSTEM_UPDATE = "update"
     #: Нераспознанная команда.
     UNKNOWN = "unknown"
 
@@ -85,11 +87,14 @@ _SIMPLE_COMMANDS = (
     CommandName.LEVEL2,
     CommandName.STATS,
     CommandName.BACKUP,
+    CommandName.SYSTEM_UPDATE,
 )
 
 #: Действия, прерывающие работу сканера. Выполняются только после явного
 #: подтверждения (``docs/telegram_commands.md``).
-DESTRUCTIVE_COMMANDS = frozenset({CommandName.STOP_SCANNER, CommandName.RESTART})
+DESTRUCTIVE_COMMANDS = frozenset(
+    {CommandName.STOP_SCANNER, CommandName.RESTART, CommandName.SYSTEM_UPDATE}
+)
 
 
 @dataclass(frozen=True, slots=True)

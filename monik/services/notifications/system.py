@@ -32,8 +32,13 @@ from monik.domain.errors import MonikError
 from monik.domain.models.health import ApplicationHealth
 from monik.domain.models.notification import NotificationDestination
 from monik.domain.value_objects.timestamps import UtcDatetime, ensure_utc
-from monik.services.notifications.ports import NotificationTransport, OutgoingMessage
+from monik.services.notifications.ports import (
+    MessageButton,
+    NotificationTransport,
+    OutgoingMessage,
+)
 from monik.services.notifications.system_messages import (
+    UPDATE_BUTTON_LABEL,
     StartupSummary,
     aggregated_text,
     pending_updates_text,
@@ -162,14 +167,36 @@ class SystemNotifier:
         self._stop_reported = True
         return await self._send(scanner_stopped_text(reason, detail=detail))
 
-    async def notify_pending_updates(self, updates: tuple[str, ...], *, apply_command: str) -> bool:
+    async def notify_pending_updates(
+        self,
+        updates: tuple[str, ...],
+        *,
+        apply_command: str,
+        apply_action: str | None = None,
+    ) -> bool:
         """Сообщить о доступных, но не установленных обновлениях.
 
         Пустой список сообщения не создаёт: напоминать не о чем.
+
+        ``apply_action`` — данные кнопки установки. Кнопка появляется
+        только тогда, когда установка приложению доступна: предлагать
+        действие, которое не выполнится, хуже, чем не предлагать его.
+        Какой именно командой она выполняется, решает вызывающая
+        сторона: система уведомлений о наборе команд не знает.
         """
         if not (self._config.enabled and updates):
             return False
-        return await self._send(pending_updates_text(updates, apply_command=apply_command))
+        buttons: tuple[tuple[MessageButton, ...], ...] = ()
+        if apply_action is not None:
+            buttons = ((MessageButton(label=UPDATE_BUTTON_LABEL, callback_data=apply_action),),)
+        return await self._send(
+            pending_updates_text(
+                updates,
+                apply_command=apply_command,
+                with_button=apply_action is not None,
+            ),
+            buttons=buttons,
+        )
 
     def notify_scanner_resumed(self) -> None:
         """Отметить, что сканирование снова идёт.
@@ -292,7 +319,9 @@ class SystemNotifier:
             return
         await self._state.set(STARTUP_NOTIFIED_KEY, now.isoformat(), updated_at=now)
 
-    async def _send(self, text: str) -> bool:
+    async def _send(
+        self, text: str, *, buttons: tuple[tuple[MessageButton, ...], ...] = ()
+    ) -> bool:
         """Отправить сообщение, не позволяя сбою доставки уронить вызвавшего.
 
         Операционное уведомление — диагностика, а не бизнес-результат: его
@@ -301,7 +330,7 @@ class SystemNotifier:
         """
         try:
             receipt = await self._transport.send(
-                OutgoingMessage(destination=self._destination, text=text)
+                OutgoingMessage(destination=self._destination, text=text, buttons=buttons)
             )
         except MonikError as error:
             _LOGGER.warning(

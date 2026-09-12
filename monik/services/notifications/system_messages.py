@@ -19,6 +19,7 @@ from monik.domain.enums.notifications import StartupKind, SystemAlertSeverity
 from monik.domain.models.health import ApplicationHealth
 
 __all__ = [
+    "UPDATE_BUTTON_LABEL",
     "StartupSummary",
     "aggregated_text",
     "pending_updates_text",
@@ -29,6 +30,10 @@ __all__ = [
     "startup_text",
     "transition_text",
 ]
+
+#: Надпись на кнопке установки обновлений. Кнопка появляется только
+#: тогда, когда установка действительно доступна приложению.
+UPDATE_BUTTON_LABEL = "⬇️ Обновить и перезапустить"
 
 #: Маркер важности в начале сообщения.
 _MARKERS: dict[SystemAlertSeverity, str] = {
@@ -172,7 +177,13 @@ def transition_text(
     return text
 
 
-def pending_updates_text(updates: Sequence[str], *, apply_command: str, limit: int = 15) -> str:
+def pending_updates_text(
+    updates: Sequence[str],
+    *,
+    apply_command: str,
+    limit: int = 15,
+    with_button: bool = False,
+) -> str:
     """Напоминание о доступных, но не установленных обновлениях.
 
     Автоматически ставятся только обновления безопасности, поэтому
@@ -188,14 +199,26 @@ def pending_updates_text(updates: Sequence[str], *, apply_command: str, limit: i
     lines.extend(f"· {item}" for item in updates[:limit])
     if len(updates) > limit:
         lines.append(f"… и ещё {len(updates) - limit}")
-    lines.extend(
-        (
-            "",
-            "Применить вручную:",
-            apply_command,
-            "После установки сканер нужно перезапустить.",
+    if with_button:
+        # Кнопка делает то же самое, поэтому команда остаётся запасным
+        # путём, а не основным способом.
+        lines.extend(
+            (
+                "",
+                "Кнопка ниже установит обновления и перезапустит сканер.",
+                "Вручную:",
+                apply_command,
+            )
         )
-    )
+    else:
+        lines.extend(
+            (
+                "",
+                "Применить вручную:",
+                apply_command,
+                "После установки сканер нужно перезапустить.",
+            )
+        )
     return "\n".join(lines)
 
 

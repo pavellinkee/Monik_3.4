@@ -43,6 +43,7 @@ from monik.domain.enums.resources import RequestPriority
 from monik.domain.enums.scheduler import TaskMode
 from monik.infrastructure.db import Database, MigrationRunner
 from monik.infrastructure.providers.contract import AggregatorAdapter
+from monik.services.commands.parser import CommandName, action_callback_data
 from monik.services.notifications import StartupSummary
 from monik.services.observability import MetricsRegistry
 from monik.services.observability.clock import Clock
@@ -420,15 +421,34 @@ def _system_updates_task(container: Container) -> TaskHandler:
     """Напоминание о доступных, но не установленных обновлениях.
 
     Автоматически ставятся только обновления безопасности, поэтому
-    остальные накапливаются. Задача ничего не устанавливает: решение и
-    момент перезапуска остаются за оператором.
+    остальные накапливаются. Задача ничего не устанавливает сама:
+    решение и момент перезапуска остаются за оператором.
+
+    К уведомлению добавляется кнопка установки — но только если нажать
+    её будет кому и чем: нужен работающий канал команд и выданное
+    системой право ставить обновления без пароля. Право выдаётся вне
+    Monik и может измениться без перезапуска, поэтому проверяется при
+    каждой проверке, а не однажды при сборке приложения.
     """
-    watcher = UpdateWatcher(AptPendingUpdates(), container.system_notifier)
+    source = AptPendingUpdates()
 
     async def run() -> None:
-        await watcher.check()
+        await UpdateWatcher(
+            source,
+            container.system_notifier,
+            apply_action=await _update_action(container),
+        ).check()
 
     return run
+
+
+async def _update_action(container: Container) -> str | None:
+    """Действие кнопки установки обновлений, если оно доступно."""
+    if container.commands is None or container.updater is None:
+        return None
+    if not await container.updater.available():
+        return None
+    return action_callback_data(CommandName.SYSTEM_UPDATE)
 
 
 def _level1_task(container: Container) -> TaskHandler:
