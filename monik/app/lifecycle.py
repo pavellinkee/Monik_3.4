@@ -48,6 +48,7 @@ from monik.services.observability import MetricsRegistry
 from monik.services.observability.clock import Clock
 from monik.services.observability.logging import get_logger, log_fields
 from monik.services.scheduler import Scheduler, TaskHandler, TaskRegistry, TaskRunner
+from monik.services.updates import AptPendingUpdates, UpdateWatcher
 
 __all__ = [
     "TASK_CAPABILITY_LOAD",
@@ -55,6 +56,7 @@ __all__ = [
     "TASK_NOTIFICATIONS",
     "TASK_BACKUP",
     "TASK_SYSTEM_HEALTH",
+    "TASK_SYSTEM_UPDATES",
     "TASK_TELEGRAM_COMMANDS",
     "Application",
     "build_application",
@@ -70,6 +72,7 @@ TASK_TELEGRAM_COMMANDS = "telegram_commands"
 TASK_CAPABILITY_LOAD = "capability_load"
 TASK_SYSTEM_HEALTH = "system_health_notifications"
 TASK_BACKUP = "backup"
+TASK_SYSTEM_UPDATES = "system_updates"
 
 #: День недели резервного копирования по умолчанию (ISO: суббота).
 _SATURDAY = 6
@@ -87,6 +90,11 @@ _DEFAULT_SCHEDULES: dict[str, TaskScheduleConfig] = {
     # конфигурацией планировщика.
     TASK_BACKUP: TaskScheduleConfig(
         mode=TaskMode.WEEKLY, time="03:00", weekday=_SATURDAY, timezone="UTC"
+    ),
+    # Напоминание о доступных обновлениях: раз в сутки утром. Ничего не
+    # устанавливает — только сообщает, что накопилось.
+    TASK_SYSTEM_UPDATES: TaskScheduleConfig(
+        mode=TaskMode.DAILY, time="09:00", timezone="UTC", interval_days=1
     ),
 }
 
@@ -326,6 +334,13 @@ def build_application(
     )
     if container.system_notifier is not None:
         registry.register(
+            TASK_SYSTEM_UPDATES,
+            _system_updates_task(container),
+            config=config.scheduler,
+            default=_DEFAULT_SCHEDULES[TASK_SYSTEM_UPDATES],
+            priority=RequestPriority.MAINTENANCE,
+        )
+        registry.register(
             TASK_SYSTEM_HEALTH,
             _system_health_task(container),
             config=config.scheduler,
@@ -397,6 +412,21 @@ def _capability_task(container: Container) -> TaskHandler:
 
     async def run() -> None:
         await container.capabilities.load()
+
+    return run
+
+
+def _system_updates_task(container: Container) -> TaskHandler:
+    """Напоминание о доступных, но не установленных обновлениях.
+
+    Автоматически ставятся только обновления безопасности, поэтому
+    остальные накапливаются. Задача ничего не устанавливает: решение и
+    момент перезапуска остаются за оператором.
+    """
+    watcher = UpdateWatcher(AptPendingUpdates(), container.system_notifier)
+
+    async def run() -> None:
+        await watcher.check()
 
     return run
 

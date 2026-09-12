@@ -10,6 +10,7 @@ bot token, ни chat id, ни тела ответов API здесь не поя
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from monik.domain.enums.control import ScannerStopReason
@@ -20,6 +21,7 @@ from monik.domain.models.health import ApplicationHealth
 __all__ = [
     "StartupSummary",
     "aggregated_text",
+    "pending_updates_text",
     "recovery_text",
     "scanner_stopped_text",
     "severity_for_component",
@@ -168,6 +170,33 @@ def transition_text(
     if reason:
         return f"{text} ({reason})"
     return text
+
+
+def pending_updates_text(updates: Sequence[str], *, apply_command: str, limit: int = 15) -> str:
+    """Напоминание о доступных, но не установленных обновлениях.
+
+    Автоматически ставятся только обновления безопасности, поэтому
+    остальные накапливаются и ждут решения оператора. Сообщение
+    перечисляет их и называет команду применения; список обрезается,
+    чтобы уведомление оставалось читаемым.
+    """
+    lines = [
+        f"{_MARKERS[SystemAlertSeverity.INFO]} Доступны обновления системы: {len(updates)}",
+        "Автоматически ставятся только обновления безопасности; эти ждут решения.",
+        "",
+    ]
+    lines.extend(f"· {item}" for item in updates[:limit])
+    if len(updates) > limit:
+        lines.append(f"… и ещё {len(updates) - limit}")
+    lines.extend(
+        (
+            "",
+            "Применить вручную:",
+            apply_command,
+            "После установки сканер нужно перезапустить.",
+        )
+    )
+    return "\n".join(lines)
 
 
 def recovery_text(subject: str) -> str:

@@ -283,14 +283,21 @@ scanner:
     max_opportunities_per_scan: 50
     max_concurrent_requests: 8
     quote_max_age_seconds: 30
-    opportunity_ttl_seconds: 120
+    # Срок, в течение которого возможность можно проверять. Поднят до
+    # десяти минут, чтобы проверка пережила ручную остановку сканера: при
+    # восстановлении просроченное задание отменяется, а не начинается
+    # заново. Возраст возможности при этом считается по календарю —
+    # время простоя из него не вычитается.
+    opportunity_ttl_seconds: 600
     deduplication_window_seconds: 300
 
   level2:
     enabled: true
     max_parallel: 20              # CLAUDE.md §18
     queue_capacity: 200
-    job_ttl_seconds: 120
+    # Срок жизни задания Level 2. Совпадает со сроком возможности: если
+    # возможность истечёт раньше, задание останется без предмета проверки.
+    job_ttl_seconds: 600
     confirmation_timeout_seconds: 60
     max_attempts: 3
     quote_max_age_seconds: 15
@@ -369,6 +376,14 @@ scheduler:
       interval_days: 1
     capability_refresh:
       mode: startup
+    # Напоминание о доступных, но не установленных обновлениях. Ничего
+    # не устанавливает: автоматически ставятся только обновления
+    # безопасности, остальные ждут решения оператора.
+    system_updates:
+      mode: daily
+      time: "09:00"
+      timezone: "Europe/Lisbon"
+      interval_days: 1
     cleanup:
       mode: daily
       time: "03:30"

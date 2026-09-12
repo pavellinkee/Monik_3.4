@@ -36,6 +36,7 @@ from monik.services.notifications.ports import NotificationTransport, OutgoingMe
 from monik.services.notifications.system_messages import (
     StartupSummary,
     aggregated_text,
+    pending_updates_text,
     recovery_text,
     scanner_stopped_text,
     severity_for_component,
@@ -160,6 +161,15 @@ class SystemNotifier:
         # приводить к повторным попыткам на каждом следующем пути остановки.
         self._stop_reported = True
         return await self._send(scanner_stopped_text(reason, detail=detail))
+
+    async def notify_pending_updates(self, updates: tuple[str, ...], *, apply_command: str) -> bool:
+        """Сообщить о доступных, но не установленных обновлениях.
+
+        Пустой список сообщения не создаёт: напоминать не о чем.
+        """
+        if not (self._config.enabled and updates):
+            return False
+        return await self._send(pending_updates_text(updates, apply_command=apply_command))
 
     def notify_scanner_resumed(self) -> None:
         """Отметить, что сканирование снова идёт.
