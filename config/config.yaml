@@ -71,8 +71,6 @@ providers:
 # Token universe. Authoritative metadata живёт в Token Registry, здесь
 # задаётся разрешённый набор. decimals указывается явно и не выводится
 # из символа (01_PROJECT_REQUIREMENTS.md §10).
-    options:
-      swapper: "0x4745ab81B8FD8C9ea6Af85980eEC6F23865576aB"
 tokens:
   - network_id: polygon
     address: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
@@ -93,6 +91,8 @@ tokens:
     symbol: USDC.e
     decimals: 6
     rank: 3
+    # Мостовой USDC на Polygon — такой же долларовый стейблкоин, как USDC.
+    usd_stable: true
 
   - network_id: polygon
     address: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"
