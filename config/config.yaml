@@ -298,10 +298,9 @@ scanner:
 profitability:
   threshold_metric: net_roi
   # Порог подтверждения Level 2: возможность должна остаться выгодной на
-  # свежих данных. Сравнение >=, ровно 1.00 % проходит.
-  final_threshold_percent: "1.00"
-  # Порог поиска Level 1: ниже него возможность не создаётся. Держится
-  # ниже порога подтверждения, иначе Level 2 нечего было бы отсеивать.
+  # свежих данных. Сравнение >=, ровно 0.50 % проходит.
+  final_threshold_percent: "0.50"
+  # Порог поиска Level 1: ниже него возможность не создаётся.
   preliminary_threshold_percent: "0.50"
 
 fees:
@@ -359,7 +358,9 @@ scheduler:
   tasks:
     level1_scan:
       mode: interval
-      interval_seconds: 600
+      # Период задаётся в scanner.level1.interval_seconds и здесь не
+      # дублируется: параметром управляют в одном месте. Указанное здесь
+      # значение, расходящееся с настройкой подсистемы, остановит старт.
       overlap_policy: skip
     fee_refresh:
       mode: daily

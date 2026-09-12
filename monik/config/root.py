@@ -8,6 +8,7 @@ Configuration определяет, **что разрешено**; Capability Re
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Self
 
 from pydantic import Field, model_validator
@@ -35,11 +36,21 @@ from monik.config.sections import (
     TokenConfig,
 )
 from monik.domain.enums.providers import ProviderId
+from monik.domain.enums.scheduler import TaskMode
 from monik.domain.value_objects.amounts import TokenAmount
 from monik.domain.value_objects.fingerprints import compute_fingerprint
 from monik.domain.value_objects.identity import NetworkId
 
 __all__ = ["Configuration"]
+
+
+#: Задачи расписания, период которых задаётся настройкой своей
+#: подсистемы. Ключ — идентификатор задачи, значение — откуда берётся
+#: период. Добавление задачи с собственной настройкой — одна строка
+#: здесь; сама настройка остаётся там, где ею управляет оператор.
+_INTERVAL_SOURCES: dict[str, Callable[[Configuration], int]] = {
+    "level1_scan": lambda config: config.scanner.level1.interval_seconds,
+}
 
 
 class Configuration(ConfigSection):
@@ -185,6 +196,44 @@ class Configuration(ConfigSection):
                 "scanner needs at least one enabled token besides the base token "
                 f"on network {self.scanner.base_network}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _resolve_scheduled_intervals(self) -> Self:
+        """Связать расписание с настройками подсистем.
+
+        Период задачи, у которой есть собственная настройка в разделе
+        подсистемы, задаётся **только там**. Расписание на неё
+        ссылается: иначе одно и то же значение существует в двух местах,
+        работает одно, и расхождение остаётся незамеченным.
+
+        Если период всё же указан и в расписании, он обязан совпадать —
+        молчаливое расхождение опаснее отсутствия настройки.
+        """
+        for task_id, source in _INTERVAL_SOURCES.items():
+            schedule = self.scheduler.tasks.get(task_id)
+            if schedule is None or schedule.mode is not TaskMode.INTERVAL:
+                continue
+            owned = source(self)
+            if schedule.interval_seconds is None:
+                self.scheduler.tasks[task_id] = schedule.model_copy(
+                    update={"interval_seconds": owned}
+                )
+                continue
+            if schedule.interval_seconds != owned:
+                raise ValueError(
+                    f"scheduler task {task_id} sets interval_seconds="
+                    f"{schedule.interval_seconds}, but its subsystem setting is {owned}; "
+                    "the period belongs to the subsystem — remove it from the schedule"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_scheduled_intervals(self) -> Self:
+        """Период INTERVAL-задачи обязан быть известен после подстановки."""
+        for task_id, schedule in self.scheduler.tasks.items():
+            if schedule.mode is TaskMode.INTERVAL and schedule.interval_seconds is None:
+                raise ValueError(f"scheduler task {task_id} is INTERVAL but has no interval")
         return self
 
     @model_validator(mode="after")

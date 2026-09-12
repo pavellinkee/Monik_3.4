@@ -399,3 +399,82 @@ class TestFileLoading:
         )
         assert loaded.config.scanner.base_token_address == USDT_ADDRESS.lower()
         assert len(loaded.secrets) == 2
+
+
+class TestScheduledIntervalSource:
+    """Период задачи задаётся настройкой её подсистемы, а не расписанием.
+
+    Одно и то же значение в двух местах опасно: работает одно, а
+    расхождение остаётся незамеченным. Так уже случилось с периодом
+    Level 1 — настройка в разделе scanner не влияла ни на что.
+    """
+
+    def test_schedule_takes_the_period_from_the_subsystem(
+        self, document: dict[str, Any], env: dict[str, str]
+    ) -> None:
+        document["scanner"]["level1"] = {"interval_seconds": 300, "scan_timeout_seconds": 240}
+        document["scheduler"] = {
+            "enabled": True,
+            "tasks": {"level1_scan": {"mode": "interval", "overlap_policy": "skip"}},
+        }
+        config = _load(document, env)
+
+        assert config.scheduler.tasks["level1_scan"].interval_seconds == 300
+
+    def test_matching_value_in_the_schedule_is_accepted(
+        self, document: dict[str, Any], env: dict[str, str]
+    ) -> None:
+        document["scanner"]["level1"] = {"interval_seconds": 300, "scan_timeout_seconds": 240}
+        document["scheduler"] = {
+            "enabled": True,
+            "tasks": {
+                "level1_scan": {
+                    "mode": "interval",
+                    "interval_seconds": 300,
+                    "overlap_policy": "skip",
+                }
+            },
+        }
+        config = _load(document, env)
+
+        assert config.scheduler.tasks["level1_scan"].interval_seconds == 300
+
+    def test_divergent_value_stops_the_start(
+        self, document: dict[str, Any], env: dict[str, str]
+    ) -> None:
+        """Молчаливое расхождение опаснее отсутствия настройки."""
+        document["scanner"]["level1"] = {"interval_seconds": 300, "scan_timeout_seconds": 240}
+        document["scheduler"] = {
+            "enabled": True,
+            "tasks": {
+                "level1_scan": {
+                    "mode": "interval",
+                    "interval_seconds": 600,
+                    "overlap_policy": "skip",
+                }
+            },
+        }
+        with pytest.raises(ConfigurationError, match="interval"):
+            _load(document, env)
+
+    def test_other_interval_tasks_keep_their_own_period(
+        self, document: dict[str, Any], env: dict[str, str]
+    ) -> None:
+        """Подстановка касается только задач с собственной настройкой."""
+        document["scheduler"] = {
+            "enabled": True,
+            "tasks": {"custom_task": {"mode": "interval", "interval_seconds": 120}},
+        }
+        config = _load(document, env)
+
+        assert config.scheduler.tasks["custom_task"].interval_seconds == 120
+
+    def test_interval_task_without_any_period_is_rejected(
+        self, document: dict[str, Any], env: dict[str, str]
+    ) -> None:
+        document["scheduler"] = {
+            "enabled": True,
+            "tasks": {"custom_task": {"mode": "interval"}},
+        }
+        with pytest.raises(ConfigurationError, match="interval"):
+            _load(document, env)

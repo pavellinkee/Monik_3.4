@@ -34,8 +34,12 @@ class TaskScheduleConfig(ConfigSection):
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
-        if self.mode is TaskMode.INTERVAL and self.interval_seconds is None:
-            raise ValueError("INTERVAL task requires interval_seconds")
+        # ``interval_seconds`` у INTERVAL-задачи может отсутствовать: для
+        # задач, у которых период задаётся настройкой своей подсистемы,
+        # значение подставляет конфигурация целиком. Так параметром
+        # управляют в одном месте, а расписание на него ссылается.
+        # Отсутствие значения и после подстановки — ошибка, и она
+        # проверяется там, где известны обе стороны.
         if self.mode is not TaskMode.INTERVAL and self.interval_seconds is not None:
             raise ValueError(f"interval_seconds is not applicable to {self.mode.value} task")
         if self.mode in {TaskMode.DAILY, TaskMode.WEEKLY}:
