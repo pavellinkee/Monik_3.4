@@ -10,11 +10,12 @@ from monik.domain.enums.lifecycle import ScanStatus
 from monik.domain.enums.providers import ProviderId
 from monik.domain.models.base import DomainModel
 from monik.domain.models.token import TokenKey
+from monik.domain.value_objects.amounts import Percentage
 from monik.domain.value_objects.identifiers import ScanId
 from monik.domain.value_objects.identity import NetworkId
 from monik.domain.value_objects.timestamps import UtcDatetime
 
-__all__ = ["Scan", "ScanScope", "ScanStatistics"]
+__all__ = ["BestCombination", "Scan", "ScanScope", "ScanStatistics"]
 
 
 class ScanScope(DomainModel):
@@ -36,6 +37,26 @@ class ScanScope(DomainModel):
         return self
 
 
+class BestCombination(DomainModel):
+    """Лучшая комбинация цикла, даже если она не прошла порог.
+
+    Комбинация, не дошедшая до порога, отбрасывается, и по результату
+    «ноль возможностей» нельзя понять, не хватило ли десятой доли
+    процента или доходность была отрицательной. Без этого длительное
+    наблюдение отвечает только на вопрос «нашли или нет», но не на
+    вопрос «насколько близко было».
+
+    Значение сохраняется целиком: доходность без указания комбинации
+    бесполезна, а комбинация без доходности ничего не сообщает.
+    """
+
+    net_roi: Percentage
+    gross_roi: Percentage | None = None
+    token: TokenKey
+    buy_provider: ProviderId
+    sell_provider: ProviderId
+
+
 class ScanStatistics(DomainModel):
     """Счётчики цикла (``36_DATA_MODELS.md`` §53).
 
@@ -50,6 +71,12 @@ class ScanStatistics(DomainModel):
     deduplicated_requests: int = Field(default=0, ge=0)
     opportunities_created: int = Field(default=0, ge=0)
     duplicate_opportunities: int = Field(default=0, ge=0)
+    #: Сколько комбинаций удалось посчитать полностью. Отличается от числа
+    #: успешных котировок: комбинация требует обеих ног и всех издержек.
+    evaluated_combinations: int = Field(default=0, ge=0)
+    #: Лучшая комбинация цикла независимо от порога. ``None`` означает,
+    #: что полностью посчитать не удалось ни одну.
+    best_combination: BestCombination | None = None
 
 
 class Scan(DomainModel):

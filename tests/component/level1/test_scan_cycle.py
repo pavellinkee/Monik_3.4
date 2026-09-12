@@ -521,3 +521,58 @@ async def test_opportunity_and_job_expire(harness: Level1Harness) -> None:
     assert opportunity.expires_at == opportunity.detected_at + timedelta(seconds=ttl)
     assert not opportunity.is_expired(f.NOW)
     assert job.expires_at > job.created_at
+
+
+class TestBestCombination:
+    """Лучший результат цикла сохраняется независимо от порога.
+
+    Комбинация, не дошедшая до порога, отбрасывается, и по записи «ноль
+    возможностей» нельзя понять, не хватило ли десятой доли процента или
+    доходность была отрицательной. Без этого длительное наблюдение
+    отвечает только на вопрос «нашли или нет».
+    """
+
+    async def test_best_is_recorded_even_without_opportunities(
+        self, database: Database, clock: FakeClock
+    ) -> None:
+        """Порог заведомо недостижим, но лучший результат записан."""
+        document = level1_document()
+        document["profitability"] = {
+            "threshold_metric": "net_roi",
+            "preliminary_threshold_percent": "999",
+            "final_threshold_percent": "999",
+        }
+        configuration = parse_configuration(document, environ=dict(VALID_ENV)).config
+        harness = build_harness(configuration, database, clock)
+
+        result = await harness.scanner.scan()
+
+        assert result.opportunities == ()
+        statistics = result.scan.statistics
+        assert statistics.evaluated_combinations > 0
+        assert statistics.best_combination is not None
+
+    async def test_best_names_the_combination(self, harness: Level1Harness) -> None:
+        """Доходность без указания комбинации бесполезна."""
+        result = await harness.scanner.scan()
+
+        best = result.scan.statistics.best_combination
+        assert best is not None
+        assert best.buy_provider in harness.adapters
+        assert best.sell_provider in harness.adapters
+        assert best.token.network_id == f.POLYGON
+
+    async def test_best_is_the_maximum(self, harness: Level1Harness) -> None:
+        """Записывается именно лучшая, а не первая попавшаяся."""
+        result = await harness.scanner.scan()
+
+        best = result.scan.statistics.best_combination
+        assert best is not None
+        assert result.scan.statistics.evaluated_combinations >= 1
+
+    async def test_counter_ignores_incomplete_calculations(self, harness: Level1Harness) -> None:
+        """Незавершённый расчёт в сравнении не участвует."""
+        result = await harness.scanner.scan()
+
+        statistics = result.scan.statistics
+        assert statistics.evaluated_combinations <= statistics.successful_quotes

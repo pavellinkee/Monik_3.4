@@ -37,18 +37,27 @@ providers:
 
   - provider_id: zero_x
     enabled: true
+    # Покупка и продажа у этого агрегатора. Разрешение двухуровневое:
+    # глобальное routes.allow_same_provider плюс согласие провайдера.
+    allow_same_provider_round_trip: true
     api_key: { env: "MONIK_ZEROX_API_KEY" }
     requests_per_second: 4.9
     supported_networks: [polygon]
 
   - provider_id: velora
     enabled: true
+    # Покупка и продажа у этого агрегатора. Разрешение двухуровневое:
+    # глобальное routes.allow_same_provider плюс согласие провайдера.
+    allow_same_provider_round_trip: true
     api_key: { env: "MONIK_VELORA_API_KEY" }
     requests_per_second: 4.9
     supported_networks: [polygon]
 
   - provider_id: uniswap
     enabled: true
+    # Покупка и продажа у этого агрегатора. Разрешение двухуровневое:
+    # глобальное routes.allow_same_provider плюс согласие провайдера.
+    allow_same_provider_round_trip: true
     api_key: { env: "MONIK_UNISWAP_API_KEY" }
     requests_per_second: 4.9
     supported_networks: [polygon]
@@ -245,7 +254,12 @@ tokens:
     rank: 30
 
 routes:
-  allow_same_provider: false
+  # Покупка и продажа у одного агрегатора. Архитектура это допускает при
+  # явном разрешении (02_LEVEL1_SCANNER.md §18); основной моделью остаётся
+  # кросс-провайдерный арбитраж. Включено для наблюдения: направление
+  # почти наверняка убыточно — вход и выход идут по одной кривой
+  # ликвидности, — но проверяется это замером, а не рассуждением.
+  allow_same_provider: true
   allowed_pairs: []
   max_route_steps: 4
 
@@ -262,7 +276,7 @@ scanner:
     # Сумма поиска. Level 1 работает одной суммой: остальные Level 2
     # подставляет в уже найденную возможность.
     amount: "50"
-    interval_seconds: 600         # production interval — 10 минут
+    interval_seconds: 300         # production interval — 5 минут
     overlap_policy: skip
     scan_timeout_seconds: 240
     top_tokens: 30

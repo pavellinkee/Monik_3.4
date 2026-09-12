@@ -18,7 +18,7 @@ from monik.config.root import Configuration
 from monik.domain.enums.lifecycle import ScanStatus
 from monik.domain.enums.providers import ProviderId
 from monik.domain.models.opportunity import Candidate, Opportunity
-from monik.domain.models.scan import Scan, ScanScope, ScanStatistics
+from monik.domain.models.scan import BestCombination, Scan, ScanScope, ScanStatistics
 from monik.domain.value_objects.identifiers import ScanId
 from monik.infrastructure.providers.contract import AggregatorAdapter
 from monik.services.level1.cycle import TokenCycle
@@ -134,7 +134,12 @@ class Level1Scanner:
         opportunities, duplicates = await self._create_opportunities(scan, candidates)
         status = self._final_status(collector, timed_out=timed_out)
         finished = await self._finish(
-            scan, collector, status, opportunities=opportunities, duplicates=duplicates
+            scan,
+            collector,
+            status,
+            opportunities=opportunities,
+            duplicates=duplicates,
+            candidates=candidates,
         )
         return ScanResult(
             scan=finished,
@@ -274,8 +279,11 @@ class Level1Scanner:
         *,
         opportunities: tuple[Opportunity, ...],
         duplicates: int,
+        candidates: tuple[Candidate, ...] = (),
     ) -> Scan:
         statistics = collector.statistics
+        evaluated = _evaluated_candidates(candidates)
+        best = _best_combination(evaluated)
         finished = scan.replace(
             status=status,
             finished_at=self._clock.now(),
@@ -286,6 +294,8 @@ class Level1Scanner:
                 skipped_combinations=statistics.skipped,
                 opportunities_created=len(opportunities),
                 duplicate_opportunities=duplicates,
+                evaluated_combinations=len(evaluated),
+                best_combination=best,
             ),
         )
         await self._scans.update(finished)
@@ -298,6 +308,15 @@ class Level1Scanner:
                 successful=statistics.successful,
                 failed=statistics.failed,
                 opportunities=len(opportunities),
+                # Лучший результат цикла независимо от порога: без него по
+                # записи «ноль возможностей» нельзя понять, насколько
+                # близко было к прибыли.
+                evaluated=len(evaluated),
+                best_net_roi=None if best is None else str(best.net_roi.value),
+                best_route=None
+                if best is None
+                else f"{best.buy_provider.value}->{best.sell_provider.value}",
+                best_token=None if best is None else str(best.token),
             ),
         )
         return finished
@@ -328,6 +347,45 @@ class Level1Scanner:
                 (scan.finished_at - scan.started_at).total_seconds(),
                 status=scan.status.value,
             )
+
+
+def _evaluated_candidates(candidates: tuple[Candidate, ...]) -> tuple[Candidate, ...]:
+    """Комбинации, для которых расчёт удалось довести до конца.
+
+    Отличается от числа успешных котировок: комбинация требует обеих ног
+    и всех известных издержек. Незавершённый расчёт в сравнении не
+    участвует — неизвестное не выдаётся за худшее или лучшее.
+    """
+    return tuple(
+        candidate for candidate in candidates if candidate.preliminary_result.net_roi is not None
+    )
+
+
+def _best_combination(candidates: tuple[Candidate, ...]) -> BestCombination | None:
+    """Лучшая комбинация цикла независимо от порога.
+
+    При равной доходности выбор детерминирован: порядок задают провайдеры
+    и токен, чтобы повторный цикл на тех же данных дал тот же результат.
+    """
+    if not candidates:
+        return None
+    best = max(
+        candidates,
+        key=lambda candidate: (
+            candidate.preliminary_result.net_roi.value,  # type: ignore[union-attr]
+            candidate.buy_quote.provider_id.value,
+            candidate.sell_quote.provider_id.value,
+            str(candidate.buy_quote.output_token),
+        ),
+    )
+    result = best.preliminary_result
+    return BestCombination(
+        net_roi=result.net_roi,  # type: ignore[arg-type]
+        gross_roi=result.gross_roi,
+        token=best.buy_quote.output_token,
+        buy_provider=best.buy_quote.provider_id,
+        sell_provider=best.sell_quote.provider_id,
+    )
 
 
 def _passes_preliminary_threshold(candidate: Candidate) -> bool:
