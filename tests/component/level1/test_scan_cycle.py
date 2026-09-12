@@ -570,6 +570,47 @@ class TestBestCombination:
         assert best is not None
         assert result.scan.statistics.evaluated_combinations >= 1
 
+    async def test_volatile_best_ignores_stable_tokens(
+        self, database: Database, clock: FakeClock
+    ) -> None:
+        """Стабильная пара выигрывает почти всегда и скрывает остальных.
+
+        У круга между стабильными токенами нет спреда, поэтому он теряет
+        меньше других и занимает запись лучшей комбинации. Второе
+        значение отвечает на вопрос, ради которого сканирование и
+        ведётся: насколько близко были волатильные токены.
+        """
+        document = level1_document()
+        stable_address = "0x3c499c542cEf5E3811e1192ce70d8cC03d5c3359"
+        document["tokens"].append(
+            {
+                "network_id": "polygon",
+                "address": stable_address,
+                "symbol": "USDC",
+                "decimals": 6,
+                "rank": 3,
+                "usd_stable": True,
+            }
+        )
+        configuration = parse_configuration(document, environ=dict(VALID_ENV)).config
+        harness = build_harness(configuration, database, clock)
+
+        statistics = (await harness.scanner.scan()).scan.statistics
+
+        best_volatile = statistics.best_volatile_combination
+        assert best_volatile is not None
+        assert best_volatile.token.address.lower() != stable_address.lower()
+        assert statistics.best_combination is not None
+        assert best_volatile.net_roi.value <= statistics.best_combination.net_roi.value
+
+    async def test_volatile_best_matches_the_overall_best_without_stable_tokens(
+        self, harness: Level1Harness
+    ) -> None:
+        """Без стабильных токенов отбирать нечего: значения совпадают."""
+        statistics = (await harness.scanner.scan()).scan.statistics
+
+        assert statistics.best_volatile_combination == statistics.best_combination
+
     async def test_counter_ignores_incomplete_calculations(self, harness: Level1Harness) -> None:
         """Незавершённый расчёт в сравнении не участвует."""
         result = await harness.scanner.scan()

@@ -19,6 +19,7 @@ from monik.domain.enums.lifecycle import ScanStatus
 from monik.domain.enums.providers import ProviderId
 from monik.domain.models.opportunity import Candidate, Opportunity
 from monik.domain.models.scan import BestCombination, Scan, ScanScope, ScanStatistics
+from monik.domain.models.token import TokenKey
 from monik.domain.value_objects.identifiers import ScanId
 from monik.infrastructure.providers.contract import AggregatorAdapter
 from monik.services.level1.cycle import TokenCycle
@@ -284,6 +285,7 @@ class Level1Scanner:
         statistics = collector.statistics
         evaluated = _evaluated_candidates(candidates)
         best = _best_combination(evaluated)
+        best_volatile = _best_combination(_volatile_candidates(evaluated, self._stable_tokens()))
         finished = scan.replace(
             status=status,
             finished_at=self._clock.now(),
@@ -296,6 +298,7 @@ class Level1Scanner:
                 duplicate_opportunities=duplicates,
                 evaluated_combinations=len(evaluated),
                 best_combination=best,
+                best_volatile_combination=best_volatile,
             ),
         )
         await self._scans.update(finished)
@@ -317,9 +320,35 @@ class Level1Scanner:
                 if best is None
                 else f"{best.buy_provider.value}->{best.sell_provider.value}",
                 best_token=None if best is None else str(best.token),
+                # Отдельно — лучшее среди волатильных токенов: стабильная
+                # пара почти всегда впереди просто потому, что теряет
+                # меньше, и по общему лучшему результату не видно, как
+                # близко было у остальных.
+                best_volatile_net_roi=(
+                    None if best_volatile is None else str(best_volatile.net_roi.value)
+                ),
+                best_volatile_route=(
+                    None
+                    if best_volatile is None
+                    else f"{best_volatile.buy_provider.value}->{best_volatile.sell_provider.value}"
+                ),
+                best_volatile_token=None if best_volatile is None else str(best_volatile.token),
             ),
         )
         return finished
+
+    def _stable_tokens(self) -> frozenset[TokenKey]:
+        """Токены, помеченные в конфигурации как стабильные.
+
+        Признак принадлежит токену, а не провайдеру и не сети, поэтому
+        читается из конфигурации напрямую: отдельного источника для него
+        заводить не нужно.
+        """
+        return frozenset(
+            TokenKey(network_id=token.network_id, address=token.address)
+            for token in self._configuration.tokens
+            if token.usd_stable
+        )
 
     def _record_metrics(self, scan: Scan, statistics: QuoteStatistics) -> None:
         """Записать метрики цикла (``28_OBSERVABILITY.md`` §30).
@@ -358,6 +387,22 @@ def _evaluated_candidates(candidates: tuple[Candidate, ...]) -> tuple[Candidate,
     """
     return tuple(
         candidate for candidate in candidates if candidate.preliminary_result.net_roi is not None
+    )
+
+
+def _volatile_candidates(
+    candidates: tuple[Candidate, ...], stable: frozenset[TokenKey]
+) -> tuple[Candidate, ...]:
+    """Комбинации по токенам, не помеченным как стабильные.
+
+    Если стабильных токенов в конфигурации нет, набор не меняется:
+    отбор не должен зависеть от того, пользуется ли пометкой конкретная
+    установка.
+    """
+    if not stable:
+        return candidates
+    return tuple(
+        candidate for candidate in candidates if candidate.buy_quote.output_token not in stable
     )
 
 
