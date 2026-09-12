@@ -495,3 +495,146 @@ async def test_schedule_resumes_from_the_last_successful_run(clock: FakeClock) -
 
     assert scheduler.next_run("level1_scan") == NOW + timedelta(seconds=200)
     assert await scheduler.tick() == ()
+
+
+# --- сетка запусков и параллельность --------------------------------------
+
+
+class TestIntervalGrid:
+    """Интервал отсчитывается от старта, а не от завершения.
+
+    Отсчёт от завершения сдвигал расписание на длительность каждого
+    выполнения: цикл Level 1 длиной пятнадцать секунд превращал интервал
+    в пять минут пятнадцать секунд, и за сутки сетка уезжала больше чем
+    на час.
+    """
+
+    async def test_next_run_does_not_absorb_the_duration(self, clock: FakeClock) -> None:
+        async def slow() -> None:
+            clock.advance(timedelta(seconds=60))
+
+        registry = TaskRegistry()
+        item = registered(interval_task(seconds=300), slow)
+        registry.tasks[item.task.task_id] = item
+        scheduler = Scheduler(registry=registry, runner=TaskRunner(clock), clock=clock)
+        await scheduler.prepare()
+
+        await scheduler.tick()
+
+        assert scheduler.next_run("level1_scan") == NOW + timedelta(seconds=300)
+
+    async def test_grid_holds_over_several_runs(self, clock: FakeClock) -> None:
+        """Сдвиг не накапливается: каждый старт кратен интервалу."""
+        starts: list[datetime] = []
+
+        async def slow() -> None:
+            starts.append(clock.now())
+            clock.advance(timedelta(seconds=17))
+
+        registry = TaskRegistry()
+        item = registered(interval_task(seconds=300), slow)
+        registry.tasks[item.task.task_id] = item
+        scheduler = Scheduler(registry=registry, runner=TaskRunner(clock), clock=clock)
+        await scheduler.prepare()
+
+        for _ in range(4):
+            await scheduler.tick()
+            # Такт наступает ровно по сетке: длительность уже «съела» 17 с.
+            clock.advance(timedelta(seconds=300) - timedelta(seconds=17))
+
+        assert starts == [NOW + timedelta(seconds=300 * i) for i in range(4)]
+
+    async def test_overrun_does_not_queue_catch_up_runs(self, clock: FakeClock) -> None:
+        """Выполнение дольше интервала даёт один запуск, а не серию (§34)."""
+
+        async def very_slow() -> None:
+            clock.advance(timedelta(seconds=1000))
+
+        registry = TaskRegistry()
+        item = registered(interval_task(seconds=300), very_slow)
+        registry.tasks[item.task.task_id] = item
+        scheduler = Scheduler(registry=registry, runner=TaskRunner(clock), clock=clock)
+        await scheduler.prepare()
+
+        await scheduler.tick()
+
+        # Пропущены три интервала, но назначен один запуск — на «сейчас».
+        assert scheduler.next_run("level1_scan") == NOW + timedelta(seconds=1000)
+
+    async def test_restart_keeps_the_grid(self, clock: FakeClock) -> None:
+        """После перезапуска отсчёт идёт от старта прошлого выполнения."""
+
+        async def handler() -> None:
+            return None
+
+        last = SchedulerExecution(
+            execution_id="e1",
+            task_id="level1_scan",
+            status=TaskExecutionStatus.SUCCESS,
+            scheduled_for=NOW - timedelta(seconds=100),
+            started_at=NOW - timedelta(seconds=100),
+            # Выполнение заняло 20 секунд: они не должны сдвинуть сетку.
+            finished_at=NOW - timedelta(seconds=80),
+        )
+        registry = TaskRegistry()
+        item = registered(interval_task(seconds=300), handler)
+        registry.tasks[item.task.task_id] = item
+        scheduler = Scheduler(
+            registry=registry, runner=TaskRunner(clock), clock=clock, log=RecordingLog(last)
+        )
+
+        await scheduler.prepare()
+
+        assert scheduler.next_run("level1_scan") == NOW + timedelta(seconds=200)
+
+
+class TestParallelTick:
+    """Задержка одной задачи не задерживает остальные (§21)."""
+
+    async def test_slow_task_does_not_delay_the_others(self, clock: FakeClock) -> None:
+        release = asyncio.Event()
+        order: list[str] = []
+
+        async def slow() -> None:
+            order.append("slow:start")
+            await release.wait()
+            order.append("slow:end")
+
+        async def quick() -> None:
+            order.append("quick")
+            release.set()
+
+        registry = TaskRegistry()
+        for task_id, handler in (("level1_scan", slow), ("telegram_commands", quick)):
+            item = registered(interval_task(task_id, seconds=300), handler)
+            registry.tasks[task_id] = item
+        scheduler = Scheduler(registry=registry, runner=TaskRunner(clock), clock=clock)
+        await scheduler.prepare()
+
+        outcomes = await asyncio.wait_for(scheduler.tick(), timeout=5)
+
+        # Быстрая задача выполнилась, пока медленная ещё ждала.
+        assert order == ["slow:start", "quick", "slow:end"]
+        assert {o.status for o in outcomes} == {TaskExecutionStatus.SUCCESS}
+
+    async def test_failure_of_one_task_does_not_stop_the_others(self, clock: FakeClock) -> None:
+        """Параллельный запуск сохраняет изоляцию сбоев (§43)."""
+
+        async def broken() -> None:
+            raise ProviderError("provider is down", code="provider_unavailable")
+
+        async def healthy() -> None:
+            return None
+
+        registry = TaskRegistry()
+        for task_id, handler in (("broken", broken), ("healthy", healthy)):
+            registry.tasks[task_id] = registered(interval_task(task_id), handler)
+        scheduler = Scheduler(registry=registry, runner=TaskRunner(clock), clock=clock)
+        await scheduler.prepare()
+
+        statuses = {o.execution.task_id: o.status for o in await scheduler.tick()}
+
+        assert statuses == {
+            "broken": TaskExecutionStatus.FAILED,
+            "healthy": TaskExecutionStatus.SUCCESS,
+        }

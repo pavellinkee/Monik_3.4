@@ -31,12 +31,16 @@ from monik.domain.enums.lifecycle import (
 )
 from monik.domain.enums.notifications import DestinationKind
 from monik.domain.enums.providers import ProviderId
+from monik.domain.enums.resources import RequestPriority
+from monik.domain.enums.scheduler import OverlapPolicy, TaskMode
+from monik.domain.models.scheduler import SchedulerTask
 from monik.infrastructure.db import Database
 from monik.infrastructure.providers.contract import AggregatorAdapter
 from monik.infrastructure.providers.fake import FakeAdapter
 from monik.infrastructure.telegram import FakeTransport
 from monik.services.notifications import NotificationDispatcher
 from monik.services.observability import FakeClock
+from monik.services.scheduler import RegisteredTask
 from tests import factories as f
 from tests.component.level1.conftest import arbitrage_rule, level1_document
 from tests.component.notifications.conftest import notification_env
@@ -143,6 +147,48 @@ async def test_scheduler_tick_runs_a_scan(
     assert any(item.execution.task_id == TASK_LEVEL1_SCAN for item in outcomes)
     row = await database.fetch_one("SELECT COUNT(*) AS count FROM scans", ())
     assert row is not None and row["count"] == 1
+
+
+async def test_a_long_task_does_not_stop_the_scheduler_loop(
+    application: tuple[Application, Database],
+) -> None:
+    """Такт не ждёт завершения задач.
+
+    Цикл сканирования идёт секунды, а установка обновлений — минуты. Пока
+    такт ждал их последовательно, планировщик не принимал команды
+    оператора и не отправлял уведомления, хотя расписания задач
+    независимы (``14_SCHEDULER.md`` §21).
+    """
+    app, _ = application
+    await app.startup()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def long_task() -> None:
+        started.set()
+        await release.wait()
+
+    app.scheduler.registry.tasks["slow_maintenance"] = RegisteredTask(
+        task=SchedulerTask(
+            task_id="slow_maintenance",
+            mode=TaskMode.INTERVAL,
+            interval=timedelta(seconds=300),
+            overlap_policy=OverlapPolicy.SKIP,
+            priority=RequestPriority.MAINTENANCE,
+        ),
+        handler=long_task,
+    )
+    await app.scheduler.prepare()
+
+    app._dispatch_tick()
+    await asyncio.wait_for(started.wait(), timeout=5)
+
+    # Задача ещё выполняется, но цикл свободен и начинает следующий такт.
+    app._dispatch_tick()
+    assert len(app._ticks) == 2
+
+    release.set()
+    await asyncio.wait_for(asyncio.gather(*tuple(app._ticks)), timeout=5)
 
 
 async def test_full_cycle_creates_opportunity_and_notification(

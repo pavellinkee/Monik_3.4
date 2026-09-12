@@ -48,7 +48,13 @@ from monik.services.notifications import StartupSummary
 from monik.services.observability import MetricsRegistry
 from monik.services.observability.clock import Clock
 from monik.services.observability.logging import get_logger, log_fields
-from monik.services.scheduler import Scheduler, TaskHandler, TaskRegistry, TaskRunner
+from monik.services.scheduler import (
+    ExecutionOutcome,
+    Scheduler,
+    TaskHandler,
+    TaskRegistry,
+    TaskRunner,
+)
 from monik.services.updates import AptPendingUpdates, UpdateWatcher
 
 __all__ = [
@@ -112,6 +118,9 @@ class Application:
     recovery_report: RecoveryReport | None = None
     startup_kind: StartupKind | None = None
     _stop: asyncio.Event = field(default_factory=asyncio.Event)
+    #: Начатые такты планировщика. Такт живёт, пока выполняются его
+    #: задачи, поэтому ссылки хранятся до завершения.
+    _ticks: set[asyncio.Task[tuple[ExecutionOutcome, ...]]] = field(default_factory=set)
     #: Дошёл ли запуск до работающих воркеров. До этого момента сканер не
     #: работал, и сообщать о его остановке нечего.
     _started: bool = False
@@ -269,21 +278,55 @@ class Application:
 
         Собственного расписания цикл не задаёт: моменты запуска определяет
         Scheduler (``14_SCHEDULER.md`` §3, §63).
+
+        Такт не дожидается выполнения запущенных задач. Иначе цикл
+        сканирования, идущий пятнадцать секунд, всё это время не давал бы
+        планировщику принять команду оператора или отправить уведомление,
+        а установка обновлений останавливала бы его на минуты. Расписания
+        задач независимы (§21), и ожидание одной задачи не должно
+        задерживать остальные.
         """
         interval = 1.0
-        while not self._stop.is_set():
-            await self._observe_scanner_state()
-            if self.container.control.restart_requested:
-                # Перезапуск выполняет менеджер служб: приложение только
-                # корректно завершает текущую работу и выходит.
-                _LOGGER.warning("restart requested; stopping the application")
-                self.request_stop()
-                break
-            await self.scheduler.tick()
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=interval)
-            except TimeoutError:
-                continue
+        try:
+            while not self._stop.is_set():
+                await self._observe_scanner_state()
+                if self.container.control.restart_requested:
+                    # Перезапуск выполняет менеджер служб: приложение только
+                    # корректно завершает текущую работу и выходит.
+                    _LOGGER.warning("restart requested; stopping the application")
+                    self.request_stop()
+                    break
+                self._dispatch_tick()
+                try:
+                    await asyncio.wait_for(self._stop.wait(), timeout=interval)
+                except TimeoutError:
+                    continue
+        finally:
+            await self._drain_ticks()
+
+    def _dispatch_tick(self) -> None:
+        """Начать такт планировщика, не дожидаясь его задач.
+
+        Ссылка на задачу сохраняется до её завершения: без этого сборщик
+        мусора вправе уничтожить ещё выполняющуюся задачу.
+        """
+        tick = asyncio.ensure_future(self.scheduler.tick())
+        self._ticks.add(tick)
+        tick.add_done_callback(self._ticks.discard)
+
+    async def _drain_ticks(self) -> None:
+        """Дождаться тактов, начатых до остановки.
+
+        Сами задачи отменяет :meth:`Scheduler.shutdown`; здесь снимаются
+        только ожидающие их такты, чтобы остановка не оставляла за собой
+        незавершённых задач.
+        """
+        pending = tuple(self._ticks)
+        if not pending:
+            return
+        for tick in pending:
+            tick.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
 def build_application(
