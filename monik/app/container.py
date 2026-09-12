@@ -737,6 +737,11 @@ def _register_provider_limits(config: Configuration, resources: ResourceManager)
     (``05_RESOURCE_MANAGER.md`` §51). Очередь появляется из конфигурации,
     поэтому новый агрегатор не требует изменений в самой очереди.
 
+    Пауза между запросами берётся из настройки агрегатора, а при её
+    отсутствии — из общей. Требования у агрегаторов разные: один отвечает
+    ошибкой частоты там, где другой работает без замечаний, и замедлять
+    из-за него остальных незачем.
+
     ``burst`` отдельным параметром не задаётся: второй источник истины для
     частоты запросов создавать нельзя. Он равен единице, и это не
     придирка, а условие соблюдения лимита. Корзина ёмкостью ``B`` при
@@ -753,7 +758,11 @@ def _register_provider_limits(config: Configuration, resources: ResourceManager)
                 max_concurrent=provider.max_concurrent_requests,
                 requests_per_second=provider.requests_per_second,
                 burst=1,
-                min_interval_seconds=config.resources.provider_min_interval_seconds,
+                min_interval_seconds=(
+                    provider.min_interval_seconds
+                    if provider.min_interval_seconds is not None
+                    else config.resources.provider_min_interval_seconds
+                ),
             ),
         )
 

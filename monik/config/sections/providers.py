@@ -30,6 +30,11 @@ class ProviderConfig(ConfigSection):
     request_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
     max_concurrent_requests: int = Field(default=4, ge=1, le=128)
     requests_per_second: float = Field(default=5.0, gt=0, le=1000)
+    #: Наименьшая пауза между двумя запросами к этому агрегатору. Заменяет
+    #: общее значение ``resources.provider_min_interval_seconds`` только
+    #: для него: требования у агрегаторов разные, и замедлять остальных
+    #: из-за одного нельзя. ``None`` означает «как у всех».
+    min_interval_seconds: float | None = Field(default=None, ge=0, le=10)
     allow_same_provider_round_trip: bool = False
     options: dict[str, str] = Field(default_factory=dict)
 

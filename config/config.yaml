@@ -42,6 +42,10 @@ providers:
     allow_same_provider_round_trip: true
     api_key: { env: "MONIK_ZEROX_API_KEY" }
     requests_per_second: 4.9
+    # 0x чаще остальных отвечает ошибкой частоты: за два часа наблюдения
+    # 15 повторов против нуля у Velora и Uniswap. Пауза только для него,
+    # общая остаётся 0.2 (resources.provider_min_interval_seconds).
+    min_interval_seconds: 0.3
     supported_networks: [polygon]
 
   - provider_id: velora

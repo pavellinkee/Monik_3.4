@@ -95,6 +95,50 @@ class TestRegistration:
         assert queues["uniswap"].requests_per_second == UNISWAP_RPS
         assert queues["uniswap"].max_concurrent == 2
 
+    async def test_provider_interval_overrides_the_common_one(
+        self, clock: FakeClock, sleeper: ControlledSleeper, rng: random.Random
+    ) -> None:
+        """У агрегаторов разные требования к паузе между запросами.
+
+        Один отвечает ошибкой частоты там, где другой работает без
+        замечаний, поэтому его пауза не должна задерживать остальных.
+        """
+        document = copy.deepcopy(level1_document())
+        document["resources"] = {"provider_min_interval_seconds": 0.2}
+        document["providers"] = [
+            {
+                "provider_id": "zero_x",
+                "enabled": True,
+                "api_key": {"env": "MONIK_ZEROX_API_KEY"},
+                "supported_networks": ["polygon"],
+                # Частота заведомо не ограничивает: проверяется пауза.
+                "requests_per_second": 100.0,
+                "min_interval_seconds": 0.3,
+            },
+            {
+                "provider_id": "velora",
+                "enabled": True,
+                "api_key": {"env": "MONIK_VELORA_API_KEY"},
+                "supported_networks": ["polygon"],
+                "requests_per_second": 100.0,
+            },
+        ]
+        environ = {**VALID_ENV, "MONIK_VELORA_API_KEY": "velora-test-key"}
+        configuration = parse_configuration(document, environ=environ).config
+        manager = ResourceManager(resource_config(), clock, sleeper=sleeper, rng=rng)
+        _register_provider_limits(configuration, manager)
+
+        waits: dict[ProviderId, float] = {}
+        for provider in (ProviderId.ZERO_X, ProviderId.VELORA):
+            before = sleeper.total_slept
+            for _ in range(4):
+                await manager.execute(request(provider=provider), lambda: _ok())
+            waits[provider] = sleeper.total_slept - before
+
+        # Три паузы между четырьмя запросами: 0.3 против общих 0.2.
+        assert waits[ProviderId.ZERO_X] == pytest.approx(0.9, abs=0.05)
+        assert waits[ProviderId.VELORA] == pytest.approx(0.6, abs=0.05)
+
     def test_queue_is_created_from_configuration_alone(
         self, clock: FakeClock, sleeper: ControlledSleeper, rng: random.Random
     ) -> None:
