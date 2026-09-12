@@ -95,6 +95,7 @@ from monik.services.notifications import (
 )
 from monik.services.observability import MetricsRegistry, TransitionRecorder, names
 from monik.services.observability.clock import Clock
+from monik.services.observability.logging import get_logger
 from monik.services.opportunity import OpportunityService
 from monik.services.opportunity.statistics import ConfirmationStatistics
 from monik.services.prices.conversion import ConversionService
@@ -113,6 +114,8 @@ from monik.services.resources import ResourceLimits, ResourceManager
 from monik.services.updates import AptSystemUpdater, SystemUpdater
 
 __all__ = ["Container", "Repositories", "build_container"]
+
+_LOGGER = get_logger("app.container")
 
 #: Фабрика HTTP-клиентов: каждая подсистема получает собственный клиент.
 HttpClientFactory = Callable[[], HttpClient]
@@ -685,6 +688,19 @@ def _destinations(loaded: LoadedConfiguration) -> tuple[NotificationDestination,
     )
 
 
+def _allowed_chat_ids(loaded: LoadedConfiguration) -> frozenset[str]:
+    """Чаты, из которых принимаются команды.
+
+    Отдельной настройки не заводится: чат, в который Monik пишет, и есть
+    чат оператора. Второй список означал бы второй источник истины и
+    расходился бы с первым при переносе на другой сервер.
+    """
+    telegram = loaded.config.notifications.telegram
+    if telegram.chat_id is None or not loaded.secrets.has(telegram.chat_id):
+        return frozenset()
+    return frozenset({loaded.secrets.get(telegram.chat_id).get()})
+
+
 def _build_telegram(
     loaded: LoadedConfiguration,
     *,
@@ -791,6 +807,12 @@ def _build_commands(
     destinations = _destinations(loaded)
     if not destinations:
         return None
+    allowed = _allowed_chat_ids(loaded)
+    if not allowed:
+        # Открытый канал команд опаснее отсутствующего: без известного
+        # чата оператора любой собеседник бота управлял бы сканером.
+        _LOGGER.warning("telegram commands are disabled: operator chat is unknown")
+        return None
     router = CommandRouter(
         jobs=repositories.jobs,
         notifications=repositories.notifications,
@@ -806,6 +828,11 @@ def _build_commands(
     )
     return CommandService(
         router=router,
+        # Команды управляют production и системой, поэтому источник
+        # команды ограничен настроенным чатом. Пустой набор означал бы
+        # «принимать от кого угодно»: бота можно найти по имени, и тогда
+        # остановить сканер или поставить обновления смог бы посторонний.
+        allowed_chat_ids=allowed,
         updates=TelegramUpdateSource(
             config,
             http=http_client(),
