@@ -16,7 +16,7 @@ from monik.services.level2.ports import (
 )
 from monik.services.level2.routes import RouteCheck, RouteVerifier
 from monik.services.level2.scanner import Level2Scanner
-from monik.services.level2.worker import Level2Worker
+from monik.services.level2.worker import ConfirmationHandler, Level2Worker
 
 __all__ = [
     "AmountVerifier",
@@ -25,6 +25,7 @@ __all__ = [
     "JobStore",
     "Level2Financials",
     "Level2Scanner",
+    "ConfirmationHandler",
     "Level2Worker",
     "OpportunityRegistry",
     "RateSource",

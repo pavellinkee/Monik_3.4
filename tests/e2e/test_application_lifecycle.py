@@ -27,7 +27,6 @@ from monik.domain.enums.health import ApplicationHealthStatus, SupervisorState
 from monik.domain.enums.lifecycle import (
     JobStatus,
     NotificationStatus,
-    OpportunityStatus,
 )
 from monik.domain.enums.notifications import DestinationKind
 from monik.domain.enums.providers import ProviderId
@@ -225,10 +224,13 @@ async def test_full_cycle_creates_opportunity_and_notification(
         confirmations = await app.container.level2_worker.drain()
         assert confirmations and confirmations[0].job_status is JobStatus.CONFIRMED
 
-        outcome = await app.container.opportunities.record_confirmation(
-            result.opportunities[0], confirmations[0]
+        # Уведомление ставит в очередь само приложение: раньше этот вызов
+        # делал тест, и отсутствие связки в сборке оставалось незамеченным —
+        # Level 2 подтверждал возможность, а оператор об этом не узнавал.
+        queued = await app.container.repositories.notifications.list_for_opportunity(
+            result.opportunities[0].opportunity_id
         )
-        assert outcome.status is OpportunityStatus.CONFIRMED
+        assert queued, "подтверждение Level 2 обязано поставить уведомление в очередь"
 
         report = await dispatcher.dispatch_pending()
         assert report.delivered

@@ -26,7 +26,9 @@ from monik.domain.enums.lifecycle import AmountConfirmationStatus
 from monik.domain.enums.notifications import DestinationKind
 from monik.domain.enums.providers import ProviderId
 from monik.domain.errors import ConfigurationError
+from monik.domain.models.job import ConfirmationResult
 from monik.domain.models.notification import NotificationDestination
+from monik.domain.models.opportunity import Opportunity
 from monik.domain.models.resource import ResourceKey
 from monik.infrastructure.db import Database
 from monik.infrastructure.http import HttpClient, HttpxClient, UrlPolicy
@@ -85,6 +87,7 @@ from monik.services.level1 import (
 from monik.services.level1.no_route import NoRouteMemory
 from monik.services.level2 import (
     AmountVerifier,
+    ConfirmationHandler,
     Level2Financials,
     Level2Scanner,
     Level2Worker,
@@ -293,6 +296,16 @@ def build_container(
     calculator = ProfitCalculator(clock)
     transitions = TransitionRecorder(repositories.transitions, clock)
 
+    formatter = MessageFormatter(config.notifications, tokens)
+    opportunities = OpportunityService(
+        publisher=repositories.confirmations,
+        notifications=repositories.notifications,
+        opportunities=repositories.opportunities,
+        sequences=repositories.sequences,
+        clock=clock,
+        destinations=_destinations(loaded),
+        renderer=formatter,
+    )
     level2_worker, level2 = _build_level2(
         config,
         adapters=provider_adapters,
@@ -306,6 +319,7 @@ def build_container(
         repositories=repositories,
         clock=clock,
         metrics=registry,
+        on_confirmation=_confirmation_handler(opportunities),
     )
     level1 = _build_level1(
         config,
@@ -324,16 +338,6 @@ def build_container(
         metrics=registry,
     )
 
-    formatter = MessageFormatter(config.notifications, tokens)
-    opportunities = OpportunityService(
-        publisher=repositories.confirmations,
-        notifications=repositories.notifications,
-        opportunities=repositories.opportunities,
-        sequences=repositories.sequences,
-        clock=clock,
-        destinations=_destinations(loaded),
-        renderer=formatter,
-    )
     telegram = _build_telegram(loaded, http_client=http_client, resources=resources, clock=clock)
     notifications = NotificationDispatcher(
         config.notifications,
@@ -606,6 +610,7 @@ def _build_level2(
     repositories: Repositories,
     clock: Clock,
     metrics: MetricsRegistry,
+    on_confirmation: ConfirmationHandler,
 ) -> tuple[Level2Worker, Level2Scanner]:
     """Level 2 вместе с его очередью."""
     verifier = AmountVerifier(
@@ -636,7 +641,23 @@ def _build_level2(
         clock=clock,
         metrics=metrics,
     )
-    return Level2Worker(scanner, config.scanner.level2), scanner
+    return Level2Worker(scanner, config.scanner.level2, on_confirmation=on_confirmation), scanner
+
+
+def _confirmation_handler(opportunities: OpportunityService) -> ConfirmationHandler:
+    """Что происходит после того, как Level 2 закончил проверку.
+
+    Без этой связки подтверждение оставалось в базе и не доходило до
+    оператора: уведомление не создавалось, а возможность навсегда
+    оставалась в статусе проверки. Level 2 о доставке по-прежнему не
+    знает — он лишь сообщает результат тому, кто владеет жизненным циклом
+    возможности (``10_LEVEL_1_SCANNER.md`` §61-62).
+    """
+
+    async def handler(opportunity: Opportunity, result: ConfirmationResult) -> None:
+        await opportunities.record_confirmation(opportunity, result)
+
+    return handler
 
 
 def _build_level1(
