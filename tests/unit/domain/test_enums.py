@@ -22,7 +22,10 @@ from monik.domain.enums import (
 
 #: Значения, зафиксированные архитектурой. Изменять только вместе с migration.
 FROZEN_VALUES: dict[str, set[str]] = {
-    "ProviderId": {"oneinch", "zero_x", "velora", "uniswap"},
+    # KyberSwap добавлен решением оператора (``the_main_rules.md``,
+    # правило 9): архитектурный §3 перечисляет четырёх провайдеров, набор
+    # расширен сознательно и записан как источник истины.
+    "ProviderId": {"oneinch", "zero_x", "velora", "uniswap", "kyberswap"},
     "OperationType": {"buy", "sell"},
     "JobStatus": {
         "queued",
@@ -79,8 +82,20 @@ def test_is_serializable_as_plain_string(enum_type: type[DomainEnum]) -> None:
 
 
 def test_provider_set_matches_approved_providers() -> None:
-    """Набор провайдеров утверждён архитектурой (01 §3)."""
-    assert {p.value for p in ProviderId} == {"oneinch", "zero_x", "velora", "uniswap"}
+    """Набор провайдеров утверждён: ``01 §3`` плюс правило 9.
+
+    Архитектурный документ перечисляет четырёх провайдеров. KyberSwap
+    добавлен отдельным решением оператора, записанным в
+    ``the_main_rules.md``; набор по-прежнему закрыт и не расширяется
+    свободно.
+    """
+    assert {p.value for p in ProviderId} == {
+        "oneinch",
+        "zero_x",
+        "velora",
+        "uniswap",
+        "kyberswap",
+    }
 
 
 def test_priority_order_is_level2_first() -> None:

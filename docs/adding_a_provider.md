@@ -99,6 +99,9 @@
 | Uniswap | `404 UpstreamTimeoutError` | `temporary_failure_reason` |
 | Velora | `404 No routes found with enough liquidity` | `no_route_reason` |
 | Velora | `400 ESTIMATED_LOSS_GREATER_THAN_MAX_IMPACT` | `route_rejection_reason` |
+| KyberSwap | `400 code=4008` — маршрут не найден | `no_route_reason` |
+| KyberSwap | `400 code=4010` — нет подходящего пула | `no_route_reason` |
+| KyberSwap | `400 code=4011` — провайдер не знает токен | `no_route_reason` |
 
 ---
 

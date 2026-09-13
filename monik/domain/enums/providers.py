@@ -16,3 +16,4 @@ class ProviderId(DomainEnum):
     ZERO_X = "zero_x"
     VELORA = "velora"
     UNISWAP = "uniswap"
+    KYBERSWAP = "kyberswap"

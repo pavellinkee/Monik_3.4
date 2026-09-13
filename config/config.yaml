@@ -75,6 +75,25 @@ providers:
       end: "19:00"
     supported_networks: [polygon]
 
+  - provider_id: kyberswap
+    enabled: true
+    # Покупка и продажа у этого агрегатора. Разрешение двухуровневое:
+    # глобальное routes.allow_same_provider плюс согласие провайдера.
+    allow_same_provider_round_trip: true
+    # Ключ доступа API не требует. Значение передаётся заголовком
+    # x-client-id, которым приложение называет себя; на цену и на лимит
+    # частоты оно не влияет — как X-Partner у Velora.
+    api_key: { env: "MONIK_KYBERSWAP_API_KEY" }
+    # Публичный лимит — 3 запроса в секунду, суточной квоты нет
+    # (docs.kyberswap.com, раздел rate limits).
+    requests_per_second: 3.0
+    min_interval_seconds: 0.35
+    # Часы работы. Вне окна агрегатор не опрашивается вовсе.
+    schedule:
+      start: "04:00"
+      end: "23:00"
+    supported_networks: [polygon]
+
   - provider_id: uniswap
     enabled: true
     # Покупка и продажа у этого агрегатора. Разрешение двухуровневое:

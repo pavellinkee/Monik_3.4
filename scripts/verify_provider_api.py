@@ -39,6 +39,7 @@ from monik.domain.models.token import Token
 from monik.domain.value_objects.identifiers import RequestId
 from monik.infrastructure.http import HttpxClient, UrlPolicy
 from monik.infrastructure.providers import AggregatorAdapter, QuoteRequest
+from monik.infrastructure.providers.kyberswap import KyberSwapAdapter
 from monik.infrastructure.providers.oneinch import OneInchAdapter
 from monik.infrastructure.providers.uniswap import UniswapAdapter
 from monik.infrastructure.providers.velora import VeloraAdapter
@@ -51,6 +52,7 @@ ADAPTERS = {
     ProviderId.ZERO_X: ZeroXAdapter,
     ProviderId.VELORA: VeloraAdapter,
     ProviderId.UNISWAP: UniswapAdapter,
+    ProviderId.KYBERSWAP: KyberSwapAdapter,
 }
 
 
@@ -96,7 +98,13 @@ def _tokens(loaded: LoadedConfiguration) -> tuple[Token, Token]:
 
 def _allowed_hosts(loaded: LoadedConfiguration) -> tuple[str, ...]:
     """Хосты, к которым скрипту разрешено обращаться."""
-    hosts = {"api.1inch.dev", "api.0x.org", "api.paraswap.io", "trade-api.gateway.uniswap.org"}
+    hosts = {
+        "api.1inch.dev",
+        "api.0x.org",
+        "api.paraswap.io",
+        "trade-api.gateway.uniswap.org",
+        "aggregator-api.kyberswap.com",
+    }
     for provider in loaded.config.enabled_providers:
         if provider.base_url:
             hosts.add(provider.base_url.removeprefix("https://").split("/", 1)[0])

@@ -32,6 +32,8 @@ from monik.infrastructure.db import Database
 from monik.infrastructure.http import HttpClient, HttpxClient, UrlPolicy
 from monik.infrastructure.providers.contract import AggregatorAdapter
 from monik.infrastructure.providers.health_tracking import HealthTrackingAdapter
+from monik.infrastructure.providers.kyberswap import KyberSwapAdapter
+from monik.infrastructure.providers.kyberswap import endpoints as kyberswap_endpoints
 from monik.infrastructure.providers.oneinch import OneInchAdapter
 from monik.infrastructure.providers.oneinch import endpoints as oneinch_endpoints
 from monik.infrastructure.providers.uniswap import UniswapAdapter
@@ -127,15 +129,20 @@ _DEFAULT_BASE_URLS: dict[ProviderId, str] = {
     ProviderId.ZERO_X: zero_x_endpoints.DEFAULT_BASE_URL,
     ProviderId.VELORA: velora_endpoints.DEFAULT_BASE_URL,
     ProviderId.UNISWAP: uniswap_endpoints.DEFAULT_BASE_URL,
+    ProviderId.KYBERSWAP: kyberswap_endpoints.DEFAULT_BASE_URL,
 }
 
 #: Соответствие идентификатора провайдера его адаптеру.
-_ADAPTERS: dict[ProviderId, type[OneInchAdapter | ZeroXAdapter | VeloraAdapter | UniswapAdapter]]
+_ADAPTERS: dict[
+    ProviderId,
+    type[OneInchAdapter | ZeroXAdapter | VeloraAdapter | UniswapAdapter | KyberSwapAdapter],
+]
 _ADAPTERS = {
     ProviderId.ONEINCH: OneInchAdapter,
     ProviderId.ZERO_X: ZeroXAdapter,
     ProviderId.VELORA: VeloraAdapter,
     ProviderId.UNISWAP: UniswapAdapter,
+    ProviderId.KYBERSWAP: KyberSwapAdapter,
 }
 
 
