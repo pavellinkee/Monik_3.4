@@ -54,7 +54,11 @@ providers:
     # глобальное routes.allow_same_provider плюс согласие провайдера.
     allow_same_provider_round_trip: true
     api_key: { env: "MONIK_VELORA_API_KEY" }
-    requests_per_second: 4.9
+    # Бесплатный тариф Velora: 1 запрос в секунду и 5000 в сутки
+    # (velora.xyz/docs/integrate/rate-limits). Превышение частоты и было
+    # причиной блокировки 13.09.
+    requests_per_second: 1.0
+    min_interval_seconds: 1.0
     supported_networks: [polygon]
 
   - provider_id: uniswap
@@ -280,7 +284,7 @@ scanner:
     # Сумма поиска. Level 1 работает одной суммой: остальные Level 2
     # подставляет в уже найденную возможность.
     amount: "50"
-    interval_seconds: 300         # production interval — 5 минут
+    interval_seconds: 600         # production interval — 10 минут
     overlap_policy: skip
     scan_timeout_seconds: 240
     top_tokens: 30
