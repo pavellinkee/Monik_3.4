@@ -527,8 +527,18 @@ def _level1_task(container: Container) -> TaskHandler:
 
 
 def _notification_task(container: Container) -> TaskHandler:
+    """Доставка уведомлений и фиксация её итога.
+
+    Диспетчер отвечает за отправку и называет возможности, по которым
+    вопрос доставки закрыт. Перевод возможности в notification-статус
+    делает владелец её жизненного цикла: система доставки о статусах
+    возможности не знает (``35_STATE_MACHINES.md`` §62-64).
+    """
+
     async def run() -> None:
-        await container.notifications.dispatch_pending()
+        report = await container.notifications.dispatch_pending()
+        for opportunity_id in dict.fromkeys(report.settled):
+            await container.opportunities.settle_delivery(opportunity_id)
 
     return run
 

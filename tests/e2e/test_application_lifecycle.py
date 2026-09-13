@@ -27,6 +27,7 @@ from monik.domain.enums.health import ApplicationHealthStatus, SupervisorState
 from monik.domain.enums.lifecycle import (
     JobStatus,
     NotificationStatus,
+    OpportunityStatus,
 )
 from monik.domain.enums.notifications import DestinationKind
 from monik.domain.enums.providers import ProviderId
@@ -235,6 +236,16 @@ async def test_full_cycle_creates_opportunity_and_notification(
         report = await dispatcher.dispatch_pending()
         assert report.delivered
         assert transport.sent and transport.sent[0].details_label == "об"
+
+        # Итог доставки фиксируется на самой возможности: иначе по базе
+        # нельзя отличить отправленное уведомление от застрявшего.
+        assert report.settled
+        for opportunity_id in report.settled:
+            await app.container.opportunities.settle_delivery(opportunity_id)
+        stored = await app.container.repositories.opportunities.get(
+            result.opportunities[0].opportunity_id
+        )
+        assert stored is not None and stored.status is OpportunityStatus.NOTIFIED
     finally:
         await app.shutdown()
         await database.close()

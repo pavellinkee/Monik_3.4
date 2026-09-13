@@ -22,6 +22,7 @@ from monik.config.sections.notifications import NotificationConfig
 from monik.domain.enums.lifecycle import NotificationStatus
 from monik.domain.enums.notifications import DeliveryErrorKind
 from monik.domain.models.notification import Notification, NotificationAttempt
+from monik.domain.value_objects.identifiers import OpportunityId
 from monik.domain.value_objects.timestamps import UtcDatetime
 from monik.services.notifications.formatter import DETAILS_BUTTON_LABEL
 from monik.services.notifications.ports import (
@@ -62,6 +63,13 @@ class DeliveryReport:
     retried: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    #: Возможности, доставка по которым завершилась в этом проходе —
+    #: успехом или окончательным отказом. Повторная попытка сюда не
+    #: попадает: доставка ещё не решена, и менять статус возможности рано.
+    #:
+    #: Диспетчер только называет затронутые возможности и ничего не знает
+    #: об их жизненном цикле: что делать дальше, решает его владелец.
+    settled: list[OpportunityId] = field(default_factory=list)
 
     @property
     def processed(self) -> int:
@@ -194,6 +202,7 @@ class NotificationDispatcher:
                 attempt_count=attempt_number,
             )
             report.delivered.append(notification.notification_id)
+            report.settled.append(notification.opportunity_id)
             self._count(outcome="delivered")
             return
 
@@ -235,6 +244,7 @@ class NotificationDispatcher:
             self._count(outcome="retried")
         else:
             report.failed.append(notification.notification_id)
+            report.settled.append(notification.opportunity_id)
             self._count(outcome="failed")
 
     async def _fail(
@@ -266,6 +276,7 @@ class NotificationDispatcher:
             extra=log_fields(error_kind=kind.value, detail=detail),
         )
         report.failed.append(notification.notification_id)
+        report.settled.append(notification.opportunity_id)
         self._count(outcome="failed")
 
     def _count(self, *, outcome: str) -> None:

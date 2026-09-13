@@ -48,6 +48,12 @@ _LOGGER = get_logger("services.opportunity")
 #: (``15_NOTIFICATION_SYSTEM.md`` §7, ``CLAUDE.md`` §26).
 _NOTIFIABLE = frozenset({OpportunityStatus.CONFIRMED, OpportunityStatus.PARTIAL})
 
+#: Состояния уведомления, в которых вопрос доставки уже решён. ``RETRY_WAIT``
+#: сюда не входит: попытка ещё предстоит.
+_SETTLED_DELIVERY = frozenset(
+    {NotificationStatus.SENT, NotificationStatus.FAILED, NotificationStatus.CANCELLED}
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ConfirmationOutcome:
@@ -137,6 +143,37 @@ class OpportunityService:
                 snapshot=snapshot,
                 notifications=tuple(item.notification for item in queued),
             )
+
+    async def settle_delivery(self, opportunity_id: OpportunityId) -> OpportunityStatus | None:
+        """Перевести возможность в notification-статус, когда доставка решена.
+
+        Вызывается после прохода очереди доставки. Статус меняется только
+        тогда, когда по **всем** назначениям возможности вопрос закрыт:
+        пока хоть одно уведомление ждёт повтора, исход неизвестен, и
+        объявлять доставку состоявшейся нельзя.
+
+        Возвращает новый статус либо ``None``, если менять пока нечего.
+        Число назначений на результат не влияет: правило одно и для
+        одного чата, и для десяти.
+        """
+        notifications = await self.notifications.list_for_opportunity(opportunity_id)
+        if not notifications:
+            return None
+        if any(item.status not in _SETTLED_DELIVERY for item in notifications):
+            return None
+        outcomes = tuple(
+            DeliveryOutcome(
+                destination_id=item.destination.destination_id,
+                delivered=item.status is NotificationStatus.SENT,
+            )
+            for item in notifications
+        )
+        status = await self.record_delivery(opportunity_id, outcomes)
+        _LOGGER.info(
+            "delivery settled",
+            extra=log_fields(status=status.value, notifications=len(notifications)),
+        )
+        return status
 
     async def record_delivery(
         self, opportunity_id: OpportunityId, outcomes: tuple[DeliveryOutcome, ...]

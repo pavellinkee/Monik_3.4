@@ -351,3 +351,71 @@ def test_confirmation_rate_excludes_partial() -> None:
 def test_confirmation_rate_is_not_available_without_decisions() -> None:
     """Без CONFIRMED и UNCONFIRMED значение — ``N/A``."""
     assert ConfirmationStatistics(partial=3).confirmation_rate is None
+
+
+# --- фиксация итога доставки ---------------------------------------------
+
+
+class TestSettleDelivery:
+    """Статус возможности меняется, когда доставка действительно решена.
+
+    Раньше этот переход не выполнялся в приложении вовсе: возможность
+    навсегда оставалась в статусе подтверждения, и по базе нельзя было
+    понять, дошло ли уведомление до оператора.
+    """
+
+    async def _queued(
+        self, database: Database, clock: FakeClock
+    ) -> tuple[object, OpportunityService]:
+        opportunity, result = await confirmed_case(database, clock)
+        service = build_service(database, clock)
+        await service.record_confirmation(opportunity, result)
+        return opportunity, service
+
+    async def test_sent_notification_marks_the_opportunity_notified(
+        self, database: Database, clock: FakeClock
+    ) -> None:
+        opportunity, service = await self._queued(database, clock)
+        store = SqliteNotificationRepository(database)
+        queued = await store.list_for_opportunity(opportunity.opportunity_id)
+        await store.update_delivery_state(
+            queued[0].notification_id, NotificationStatus.SENT, updated_at=clock.now()
+        )
+
+        status = await service.settle_delivery(opportunity.opportunity_id)
+
+        assert status is OpportunityStatus.NOTIFIED
+
+    async def test_failed_notification_marks_the_opportunity_failed(
+        self, database: Database, clock: FakeClock
+    ) -> None:
+        opportunity, service = await self._queued(database, clock)
+        store = SqliteNotificationRepository(database)
+        queued = await store.list_for_opportunity(opportunity.opportunity_id)
+        await store.update_delivery_state(
+            queued[0].notification_id, NotificationStatus.FAILED, updated_at=clock.now()
+        )
+
+        status = await service.settle_delivery(opportunity.opportunity_id)
+
+        assert status is OpportunityStatus.NOTIFIED_FAILED
+
+    async def test_pending_delivery_does_not_change_the_status(
+        self, database: Database, clock: FakeClock
+    ) -> None:
+        """Пока уведомление ждёт отправки, исход неизвестен."""
+        opportunity, service = await self._queued(database, clock)
+
+        status = await service.settle_delivery(opportunity.opportunity_id)
+
+        assert status is None
+        stored = await SqliteOpportunityRepository(database).get(opportunity.opportunity_id)
+        assert stored is not None and stored.status is OpportunityStatus.CONFIRMED
+
+    async def test_opportunity_without_notifications_is_left_alone(
+        self, database: Database, clock: FakeClock
+    ) -> None:
+        opportunity, _ = await confirmed_case(database, clock)
+        service = build_service(database, clock)
+
+        assert await service.settle_delivery(opportunity.opportunity_id) is None
