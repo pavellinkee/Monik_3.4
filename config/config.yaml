@@ -334,7 +334,7 @@ profitability:
   # свежих данных. Сравнение >=, ровно 0.10 % проходит.
   final_threshold_percent: "0.10"
   # Порог поиска Level 1: ниже него возможность не создаётся.
-  preliminary_threshold_percent: "0.10"
+  preliminary_threshold_percent: "0.05"
 
 fees:
   enabled: true
