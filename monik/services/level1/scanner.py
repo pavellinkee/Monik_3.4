@@ -302,6 +302,8 @@ class Level1Scanner:
         evaluated = _evaluated_candidates(candidates)
         best = _best_combination(evaluated)
         best_volatile = _best_combination(_volatile_candidates(evaluated, self._stable_tokens()))
+        blocked = _blocked_by_unknown_cost(candidates)
+        unknown_costs = _unknown_cost_components(candidates)
         finished = scan.replace(
             status=status,
             finished_at=self._clock.now(),
@@ -314,6 +316,8 @@ class Level1Scanner:
                 opportunities_created=len(opportunities),
                 duplicate_opportunities=duplicates,
                 evaluated_combinations=len(evaluated),
+                blocked_by_unknown_cost=len(blocked),
+                unknown_cost_components=unknown_costs,
                 best_combination=best,
                 best_volatile_combination=best_volatile,
             ),
@@ -351,6 +355,12 @@ class Level1Scanner:
                     else f"{best_volatile.buy_provider.value}->{best_volatile.sell_provider.value}"
                 ),
                 best_volatile_token=None if best_volatile is None else str(best_volatile.token),
+                # Почему лучшая комбинация не стала возможностью. Без этих
+                # полей «ноль возможностей» выглядит одинаково и когда
+                # доходность не дотянула до порога, и когда порог не
+                # оценивался из-за неизвестного расхода.
+                blocked_by_unknown_cost=len(blocked),
+                unknown_costs=",".join(unknown_costs) or None,
             ),
         )
         return finished
@@ -406,6 +416,38 @@ def _evaluated_candidates(candidates: tuple[Candidate, ...]) -> tuple[Candidate,
     return tuple(
         candidate for candidate in candidates if candidate.preliminary_result.net_roi is not None
     )
+
+
+#: Сколько разных меток неизвестных расходов сохраняется. Диагностике
+#: важен состав, а не полный перечень: метки повторяются от комбинации к
+#: комбинации.
+_UNKNOWN_COST_LIMIT = 10
+
+
+def _blocked_by_unknown_cost(candidates: tuple[Candidate, ...]) -> tuple[Candidate, ...]:
+    """Комбинации, у которых порог не оценивался из-за неизвестного расхода.
+
+    Отличаются от не прошедших порог: доходность у них может быть какой
+    угодно, включая достаточную. Решение не засчитывать такой порог
+    принято архитектурой (``09_PROFIT_CALCULATOR.md`` §27) и здесь только
+    подсчитывается.
+    """
+    return tuple(
+        candidate
+        for candidate in candidates
+        if (outcome := candidate.preliminary_result.threshold_outcome) is not None
+        and outcome.blocked_by_unknown_cost
+    )
+
+
+def _unknown_cost_components(candidates: tuple[Candidate, ...]) -> tuple[str, ...]:
+    """Какие расходы оказались неизвестны — различные метки, по порядку."""
+    labels: set[str] = set()
+    for candidate in candidates:
+        costs = candidate.preliminary_result.costs
+        if costs is not None:
+            labels.update(costs.unknown_components)
+    return tuple(sorted(labels))[:_UNKNOWN_COST_LIMIT]
 
 
 def _volatile_candidates(

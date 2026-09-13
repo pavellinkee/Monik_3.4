@@ -524,6 +524,38 @@ async def test_opportunity_and_job_expire(harness: Level1Harness) -> None:
     assert job.expires_at > job.created_at
 
 
+class TestBlockedByUnknownCost:
+    """Видно, почему комбинация не стала возможностью.
+
+    Порог намеренно не засчитывается, когда хотя бы один расход
+    неизвестен. Без отдельного счётчика «ноль возможностей» выглядит
+    одинаково и когда доходность не дотянула, и когда порог вообще не
+    оценивался, — и причина отсева определялась только догадкой по
+    совпадению gross и net.
+    """
+
+    async def test_unknown_gas_is_counted_and_named(
+        self, database: Database, clock: FakeClock
+    ) -> None:
+        configuration = parse_configuration(level1_document(), environ=dict(VALID_ENV)).config
+        # Курс native token недоступен: расход газа посчитать не из чего.
+        harness = build_harness(configuration, database, clock, rates=StaticRateSource(rate=None))
+
+        statistics = (await harness.scanner.scan()).scan.statistics
+
+        assert statistics.blocked_by_unknown_cost > 0
+        assert any("gas" in label for label in statistics.unknown_cost_components)
+
+    async def test_complete_calculation_reports_nothing_blocked(
+        self, harness: Level1Harness
+    ) -> None:
+        """Когда все расходы известны, счётчик пуст."""
+        statistics = (await harness.scanner.scan()).scan.statistics
+
+        assert statistics.blocked_by_unknown_cost == 0
+        assert statistics.unknown_cost_components == ()
+
+
 class TestProviderSchedule:
     """Часы работы агрегатора.
 
