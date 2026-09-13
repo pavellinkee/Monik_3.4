@@ -10,9 +10,11 @@ Scope полностью определяется конфигурацией и 
 from __future__ import annotations
 
 from monik.config.root import Configuration
+from monik.domain.enums.providers import ProviderId
 from monik.domain.errors import ConfigurationError
 from monik.domain.models.scan import ScanScope
 from monik.domain.models.token import Token
+from monik.services.observability.clock import Clock
 from monik.services.registries.networks import NetworkRegistry
 from monik.services.registries.providers import ProviderRegistry
 from monik.services.registries.tokens import TokenRegistry
@@ -30,11 +32,13 @@ class ScopeBuilder:
         networks: NetworkRegistry,
         tokens: TokenRegistry,
         providers: ProviderRegistry,
+        clock: Clock,
     ) -> None:
         self._configuration = configuration
         self._networks = networks
         self._tokens = tokens
         self._providers = providers
+        self._clock = clock
 
     def build(self) -> ScanScope:
         """Собрать scope цикла.
@@ -50,14 +54,10 @@ class ScopeBuilder:
             )
 
         base_token = self._tokens.base_token
-        providers = tuple(
-            provider.provider_id
-            for provider in self._providers.enabled()
-            if self._providers.declares_network(provider.provider_id, network_id)
-        )
+        providers = self.active_providers()
         if not providers:
             raise ConfigurationError(
-                f"no enabled provider declares network {network_id}; Level 1 has no source"
+                f"no provider is available for network {network_id}; Level 1 has no source"
             )
 
         tokens = self.scan_tokens()
@@ -73,6 +73,23 @@ class ScopeBuilder:
             providers=providers,
             tokens=tuple(token.key for token in tokens),
             raw_amounts=raw_amounts,
+        )
+
+    def active_providers(self) -> tuple[ProviderId, ...]:
+        """Провайдеры, участвующие в цикле прямо сейчас.
+
+        Кроме включённости и заявленной сети учитываются часы работы:
+        вне своего окна провайдер не опрашивается вовсе. Запрос не
+        отправляется и не отклоняется — его просто не возникает, поэтому
+        расписание не отражается ни на статистике отказов, ни на
+        состоянии здоровья.
+        """
+        network_id = self._configuration.scanner.base_network
+        now = self._clock.now()
+        return tuple(
+            provider.provider_id
+            for provider in self._providers.active(now)
+            if self._providers.declares_network(provider.provider_id, network_id)
         )
 
     def scan_tokens(self) -> tuple[Token, ...]:

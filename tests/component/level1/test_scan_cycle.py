@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 from decimal import Decimal
+from typing import Any
 
 import pytest
 
@@ -521,6 +522,80 @@ async def test_opportunity_and_job_expire(harness: Level1Harness) -> None:
     assert opportunity.expires_at == opportunity.detected_at + timedelta(seconds=ttl)
     assert not opportunity.is_expired(f.NOW)
     assert job.expires_at > job.created_at
+
+
+class TestProviderSchedule:
+    """Часы работы агрегатора.
+
+    Нужны там, где у провайдера своя суточная квота: расход ограничивают
+    не только частотой запросов, но и временем работы. Вне окна запрос не
+    отправляется и не отклоняется — он просто не возникает.
+    """
+
+    def _document(self, **schedule: object) -> dict[str, Any]:
+        document = level1_document()
+        for provider in document["providers"]:
+            if provider["provider_id"] == "zero_x":
+                provider["schedule"] = schedule
+        return document
+
+    async def _scan_providers(
+        self, document: dict[str, Any], database: Database, clock: FakeClock
+    ) -> tuple[str, ...]:
+        configuration = parse_configuration(document, environ=dict(VALID_ENV)).config
+        harness = build_harness(configuration, database, clock)
+        result = await harness.scanner.scan()
+        return tuple(provider.value for provider in result.scan.scope.providers)
+
+    async def test_provider_outside_its_window_is_not_scanned(
+        self, database: Database, clock: FakeClock
+    ) -> None:
+        # ``f.NOW`` — полдень UTC; окно ночное, значит 0x отдыхает.
+        document = self._document(start="22:00", end="04:00", timezone="UTC")
+
+        providers = await self._scan_providers(document, database, clock)
+
+        assert "zero_x" not in providers
+        assert "oneinch" in providers
+
+    async def test_provider_inside_its_window_is_scanned(
+        self, database: Database, clock: FakeClock
+    ) -> None:
+        document = self._document(start="07:00", end="19:00", timezone="UTC")
+
+        providers = await self._scan_providers(document, database, clock)
+
+        assert "zero_x" in providers
+
+    async def test_provider_without_a_schedule_works_around_the_clock(
+        self, database: Database, clock: FakeClock
+    ) -> None:
+        providers = await self._scan_providers(level1_document(), database, clock)
+
+        assert "zero_x" in providers
+
+    async def test_cycle_is_skipped_when_every_provider_rests(
+        self, database: Database, clock: FakeClock
+    ) -> None:
+        """Когда отдыхают все, цикл не нужен: пустая запись не создаётся."""
+        document = level1_document()
+        for provider in document["providers"]:
+            provider["schedule"] = {"start": "22:00", "end": "04:00", "timezone": "UTC"}
+        configuration = parse_configuration(document, environ=dict(VALID_ENV)).config
+        harness = build_harness(configuration, database, clock)
+
+        assert not harness.scanner.has_active_providers()
+
+    async def test_schedule_does_not_hide_a_provider_from_the_registry(
+        self, database: Database, clock: FakeClock
+    ) -> None:
+        """Отдых — не то же самое, что выключение: провайдер остаётся настроенным."""
+        document = self._document(start="22:00", end="04:00", timezone="UTC")
+        configuration = parse_configuration(document, environ=dict(VALID_ENV)).config
+        harness = build_harness(configuration, database, clock)
+
+        assert harness.providers.is_enabled(ProviderId.ZERO_X)
+        assert not harness.providers.is_active(ProviderId.ZERO_X, clock.now())
 
 
 class TestHonestCounters:

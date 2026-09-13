@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from monik.config.root import Configuration
 from monik.domain.enums.providers import ProviderId
 from monik.domain.errors import ConfigurationError
 from monik.domain.models.provider import Provider
 from monik.domain.value_objects.identity import NetworkId
+from monik.domain.value_objects.schedule import DailyWindow
 
 __all__ = ["ProviderRegistry"]
 
@@ -33,6 +36,14 @@ class ProviderRegistry:
             for provider in configuration.providers
         }
         self._pairs = configuration.provider_pairs()
+        # Часы работы — особенность конкретного провайдера, поэтому она
+        # описана у него в конфигурации и превращается здесь в общее
+        # понятие «окно». Провайдер без расписания работает круглосуточно.
+        self._windows = {
+            provider.provider_id: provider.schedule.window(configuration.application.timezone)
+            for provider in configuration.providers
+            if provider.schedule is not None
+        }
 
     def get(self, provider_id: ProviderId) -> Provider | None:
         """Найти провайдера."""
@@ -56,6 +67,29 @@ class ProviderRegistry:
         """
         provider = self.get(provider_id)
         return provider is not None and provider.enabled
+
+    def window(self, provider_id: ProviderId) -> DailyWindow | None:
+        """Окно работы провайдера, если оно задано."""
+        return self._windows.get(provider_id)
+
+    def is_active(self, provider_id: ProviderId, now: datetime) -> bool:
+        """Разрешено ли обращаться к провайдеру в этот момент.
+
+        Отличается от :meth:`is_enabled`: выключенный провайдер не
+        используется никогда, а вне окна он просто отдыхает и вернётся в
+        работу сам. Ни возможности провайдера, ни его состояние здоровья
+        от расписания не зависят — это решение оператора, а не сбой.
+        """
+        if not self.is_enabled(provider_id):
+            return False
+        window = self._windows.get(provider_id)
+        return window is None or window.contains(now)
+
+    def active(self, now: datetime) -> tuple[Provider, ...]:
+        """Включённые провайдеры, находящиеся сейчас в своём окне."""
+        return tuple(
+            provider for provider in self.enabled() if self.is_active(provider.provider_id, now)
+        )
 
     def enabled(self) -> tuple[Provider, ...]:
         """Все включённые провайдеры."""

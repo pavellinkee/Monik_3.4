@@ -511,6 +511,11 @@ def _level1_task(container: Container) -> TaskHandler:
                 extra=log_fields(state=container.control.state().value),
             )
             return
+        if not container.level1.has_active_providers():
+            # Все агрегаторы вне своих часов работы. Это решение
+            # оператора, а не сбой: цикл просто не нужен.
+            _LOGGER.info("level 1 scan skipped: no provider is within its working hours")
+            return
         await container.level1.scan()
         container.health.set_component(
             "level1",

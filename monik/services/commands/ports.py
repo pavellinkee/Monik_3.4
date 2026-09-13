@@ -128,6 +128,11 @@ class ProviderStatus:
     active: int
     waiting: int
     reason: str | None = None
+    #: Часы работы агрегатора, если они заданы. Без этой строки молчащий
+    #: по расписанию провайдер выглядит как неисправный.
+    schedule: str | None = None
+    #: Находится ли он сейчас в своём окне.
+    within_schedule: bool = True
 
 
 @dataclass(frozen=True, slots=True)

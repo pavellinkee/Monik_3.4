@@ -491,13 +491,21 @@ def _button(command: CommandName) -> MessageButton:
 
 
 def _provider_line(item: ProviderStatus) -> str:
-    """Одна строка состояния агрегатора."""
-    return (
+    """Одна строка состояния агрегатора.
+
+    Часы работы показываются, только если они заданы: иначе молчащий по
+    расписанию агрегатор выглядит как неисправный.
+    """
+    line = (
         f"{item.provider}: {item.health}"
         f" · очередь {item.active}/{item.max_concurrent}"
         f" (ожидают {item.waiting})"
         f" · {item.requests_per_second} зап/с"
     )
+    if item.schedule is not None:
+        mark = "работает" if item.within_schedule else "перерыв"
+        line = f"{line} · {item.schedule} ({mark})"
+    return line
 
 
 def _provider_details(item: ProviderStatus) -> str:

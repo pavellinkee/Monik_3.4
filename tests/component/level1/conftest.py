@@ -239,6 +239,7 @@ class Level1Harness:
     opportunities: SqliteOpportunityRepository
     scans: SqliteScanRepository
     tokens: TokenRegistry
+    providers: ProviderRegistry
 
 
 def build_harness(
@@ -273,7 +274,7 @@ def build_harness(
     rate_source = rates or StaticRateSource()
     level2 = dispatcher or RecordingDispatcher()
     scope_builder = ScopeBuilder(
-        configuration, networks=networks, tokens=tokens, providers=providers
+        configuration, networks=networks, tokens=tokens, providers=providers, clock=clock
     )
     evaluator = PreliminaryEvaluator(
         ProfitCalculator(clock),
@@ -314,6 +315,7 @@ def build_harness(
         opportunities=opportunity_repository,
         scans=scan_repository,
         tokens=tokens,
+        providers=providers,
     )
 
 

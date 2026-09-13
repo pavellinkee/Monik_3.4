@@ -351,6 +351,7 @@ def build_container(
         control=control,
         backups=backups,
         updater=updater,
+        providers=providers,
     )
     system_notifier = _build_system_notifier(
         loaded, telegram=telegram, repositories=repositories, clock=clock
@@ -653,7 +654,9 @@ def _build_level1(
     return Level1Scanner(
         config,
         adapters=adapters,
-        scope_builder=ScopeBuilder(config, networks=networks, tokens=tokens, providers=providers),
+        scope_builder=ScopeBuilder(
+            config, networks=networks, tokens=tokens, providers=providers, clock=clock
+        ),
         combinations=CombinationFilter(capabilities, config.scanner.level1, no_route),
         no_route=no_route,
         evaluator=PreliminaryEvaluator(
@@ -808,6 +811,7 @@ def _build_commands(
     control: ScannerSwitch,
     backups: BackupService,
     updater: SystemUpdater,
+    providers: ProviderRegistry,
 ) -> CommandService | None:
     """Входящий канал команд, если он включён конфигурацией."""
     config = loaded.config.notifications.telegram
@@ -827,7 +831,9 @@ def _build_commands(
         notifications=repositories.notifications,
         status=_HealthStatusSource(health),
         stats=_MetricsStatsSource(metrics),
-        providers=_ProviderStatusSource(health, resources, loaded.config),
+        providers=_ProviderStatusSource(
+            health, resources, loaded.config, providers=providers, clock=clock
+        ),
         scans=repositories.scans,
         control=control,
         backups=_BackupStatusSource(backups),
@@ -896,20 +902,30 @@ class _ProviderStatusSource:
     """
 
     def __init__(
-        self, health: HealthMonitor, resources: ResourceManager, config: Configuration
+        self,
+        health: HealthMonitor,
+        resources: ResourceManager,
+        config: Configuration,
+        *,
+        providers: ProviderRegistry,
+        clock: Clock,
     ) -> None:
         self._health = health
         self._resources = resources
         self._config = config
+        self._providers = providers
+        self._clock = clock
 
     def providers(self) -> tuple[ProviderStatus, ...]:
         """Состояние каждого включённого агрегатора."""
         queues = {snapshot.resource: snapshot for snapshot in self._resources.queue_snapshots()}
+        now = self._clock.now()
         statuses = []
         for provider in self._config.enabled_providers:
             name = provider.provider_id.value
             health = self._health.provider(provider.provider_id)
             queue = queues.get(name)
+            window = self._providers.window(provider.provider_id)
             statuses.append(
                 ProviderStatus(
                     provider=name,
@@ -920,6 +936,8 @@ class _ProviderStatusSource:
                     active=queue.active if queue else 0,
                     waiting=queue.waiting if queue else 0,
                     reason=health.reason,
+                    schedule=window.describe() if window else None,
+                    within_schedule=self._providers.is_active(provider.provider_id, now),
                 )
             )
         return tuple(statuses)

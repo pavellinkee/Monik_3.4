@@ -82,6 +82,14 @@ class Level1Scanner:
         self._clock = clock
         self._metrics = metrics
 
+    def has_active_providers(self) -> bool:
+        """Есть ли сейчас провайдер в своём рабочем окне.
+
+        Спрашивается до начала цикла: когда отдыхают все, цикл не нужен
+        вовсе, и создавать пустую запись сканирования незачем.
+        """
+        return bool(self._scope_builder.active_providers())
+
     async def scan(self, scope: ScanScope | None = None) -> ScanResult:
         """Выполнить цикл.
 

@@ -46,6 +46,10 @@ providers:
     # 15 повторов против нуля у Velora и Uniswap. Пауза только для него,
     # общая остаётся 0.2 (resources.provider_min_interval_seconds).
     min_interval_seconds: 0.3
+    # Часы работы. Вне окна агрегатор не опрашивается вовсе.
+    schedule:
+      start: "04:00"
+      end: "23:00"
     supported_networks: [polygon]
 
   - provider_id: velora
@@ -59,6 +63,11 @@ providers:
     # причиной блокировки 13.09.
     requests_per_second: 1.0
     min_interval_seconds: 1.0
+    # Часы работы. Короткое окно бережёт суточную квоту бесплатного
+    # тарифа: за 12 часов расход вдвое меньше, чем за сутки.
+    schedule:
+      start: "07:00"
+      end: "19:00"
     supported_networks: [polygon]
 
   - provider_id: uniswap
@@ -68,6 +77,10 @@ providers:
     allow_same_provider_round_trip: true
     api_key: { env: "MONIK_UNISWAP_API_KEY" }
     requests_per_second: 4.9
+    # Часы работы. Вне окна агрегатор не опрашивается вовсе.
+    schedule:
+      start: "04:00"
+      end: "23:00"
     supported_networks: [polygon]
     options:
       swapper: "0x4745ab81B8FD8C9ea6Af85980eEC6F23865576aB"
