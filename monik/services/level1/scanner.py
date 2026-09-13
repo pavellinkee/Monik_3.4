@@ -261,14 +261,22 @@ class Level1Scanner:
         return opportunity
 
     def _final_status(self, collector: QuoteCollector, *, timed_out: bool) -> ScanStatus:
+        """Итог цикла.
+
+        Неполным цикл делает и отказ провайдера, и неотправленный запрос:
+        в обоих случаях часть комбинаций осталась непосчитанной. Разводятся
+        они только в счётчиках — там от этого зависит, чью работу они
+        описывают: агрегаторов или самого Monik.
+        """
         statistics = collector.statistics
         if timed_out:
             return ScanStatus.PARTIAL if statistics.successful else ScanStatus.FAILED
-        if statistics.requests == 0:
+        if statistics.requests == 0 and statistics.refused == 0:
             return ScanStatus.COMPLETE
-        if statistics.failed and statistics.successful:
+        incomplete = statistics.failed + statistics.refused
+        if incomplete and statistics.successful:
             return ScanStatus.PARTIAL
-        if statistics.failed:
+        if incomplete:
             return ScanStatus.FAILED
         return ScanStatus.COMPLETE
 
@@ -293,6 +301,7 @@ class Level1Scanner:
                 quote_requests=statistics.requests,
                 successful_quotes=statistics.successful,
                 failed_quotes=statistics.failed,
+                refused_requests=statistics.refused,
                 skipped_combinations=statistics.skipped,
                 opportunities_created=len(opportunities),
                 duplicate_opportunities=duplicates,
@@ -310,6 +319,7 @@ class Level1Scanner:
                 requests=statistics.requests,
                 successful=statistics.successful,
                 failed=statistics.failed,
+                refused=statistics.refused,
                 opportunities=len(opportunities),
                 # Лучший результат цикла независимо от порога: без него по
                 # записи «ноль возможностей» нельзя понять, насколько

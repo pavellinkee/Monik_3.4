@@ -91,6 +91,98 @@ class TestRetryPolicy:
         assert policy.should_retry(RateLimitError("429").info, attempts_used=0)
 
 
+class TestRateLimitCooldown:
+    """Исчерпанная квота — не временный сбой.
+
+    Временный сбой проходит за секунды, а суточная квота
+    восстанавливается часами. Пробы каждые тридцать секунд всё это время
+    только расходуют её остаток, поэтому для этой категории отказа паузы
+    растут по лестнице.
+    """
+
+    def _breaker(self, clock: FakeClock) -> CircuitBreaker:
+        return CircuitBreaker(
+            CircuitBreakerConfig(
+                failure_threshold=1,
+                recovery_timeout_seconds=30.0,
+                half_open_max_calls=1,
+                success_threshold=1,
+            ),
+            clock,
+        )
+
+    def _probe(self, breaker: CircuitBreaker, clock: FakeClock, seconds: float) -> bool:
+        """Прошла ли пауза указанной длины: состояние после ожидания."""
+        clock.advance(timedelta(seconds=seconds))
+        return breaker.state is CircuitState.HALF_OPEN
+
+    def test_first_ten_probes_keep_the_short_pause(self, clock: FakeClock) -> None:
+        breaker = self._breaker(clock)
+        for _ in range(10):
+            breaker.on_failure(rate_limited=True)
+            assert not self._probe(breaker, clock, 29)
+            assert self._probe(breaker, clock, 2)
+
+    def test_pause_grows_after_ten_probes(self, clock: FakeClock) -> None:
+        """Одиннадцатая проба ждёт пять минут, а не тридцать секунд."""
+        breaker = self._breaker(clock)
+        for _ in range(10):
+            breaker.on_failure(rate_limited=True)
+            clock.advance(timedelta(seconds=31))
+            assert breaker.state is CircuitState.HALF_OPEN
+
+        breaker.on_failure(rate_limited=True)
+
+        assert not self._probe(breaker, clock, 60)
+        assert self._probe(breaker, clock, 245)
+
+    def test_pause_reaches_hours(self, clock: FakeClock) -> None:
+        """После лестницы пробы идут раз в два часа и не прекращаются."""
+        breaker = self._breaker(clock)
+        for _ in range(22):
+            breaker.on_failure(rate_limited=True)
+            clock.advance(timedelta(hours=3))
+            assert breaker.state is CircuitState.HALF_OPEN
+
+        breaker.on_failure(rate_limited=True)
+
+        assert not self._probe(breaker, clock, 3600)
+        assert self._probe(breaker, clock, 3601)
+
+    def test_ordinary_failure_keeps_the_configured_pause(self, clock: FakeClock) -> None:
+        """Лестница не касается обычных отказов."""
+        breaker = self._breaker(clock)
+        for _ in range(15):
+            breaker.on_failure()
+            clock.advance(timedelta(seconds=31))
+            assert breaker.state is CircuitState.HALF_OPEN
+
+    def test_ordinary_failure_resets_the_ladder(self, clock: FakeClock) -> None:
+        """Исправный ресурс не наследует многочасовую паузу от квоты."""
+        breaker = self._breaker(clock)
+        for _ in range(12):
+            breaker.on_failure(rate_limited=True)
+            clock.advance(timedelta(minutes=6))
+            assert breaker.state is CircuitState.HALF_OPEN
+
+        breaker.on_failure()
+
+        assert self._probe(breaker, clock, 31)
+
+    def test_success_resets_the_ladder(self, clock: FakeClock) -> None:
+        breaker = self._breaker(clock)
+        for _ in range(12):
+            breaker.on_failure(rate_limited=True)
+            clock.advance(timedelta(minutes=6))
+        assert breaker.state is CircuitState.HALF_OPEN
+        breaker.on_success()
+        assert breaker.state is CircuitState.CLOSED
+
+        breaker.on_failure(rate_limited=True)
+
+        assert self._probe(breaker, clock, 31)
+
+
 class TestCircuitBreaker:
     def _breaker(self, clock: FakeClock, **overrides: object) -> CircuitBreaker:
         settings: dict[str, object] = {

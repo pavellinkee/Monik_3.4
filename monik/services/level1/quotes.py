@@ -75,10 +75,17 @@ class QuoteAttempt:
 class QuoteStatistics:
     """Счётчики запросов одного цикла."""
 
+    #: Запросы, действительно отправленные провайдерам.
     requests: int = 0
     successful: int = 0
+    #: Провайдер ответил отказом: нет маршрута, отклонённый маршрут, сбой.
     failed: int = 0
     skipped: int = 0
+    #: Запрос не отправлен: ресурс закрыт предохранителем или очередь не
+    #: дождалась. Это состояние Monik, а не ответ провайдера, поэтому в
+    #: успешность оно не входит — иначе открытый circuit breaker выглядел
+    #: бы как отказ агрегатора.
+    refused: int = 0
     attempts: list[QuoteAttempt] = field(default_factory=list)
 
 
@@ -166,11 +173,30 @@ class QuoteCollector:
         self.statistics.skipped += count
 
     async def _fetch(self, adapter: AggregatorAdapter, request: QuoteRequest) -> QuoteAttempt:
-        self.statistics.requests += 1
         async with self._semaphore:
             try:
                 quote = await adapter.get_quote(request)
             except MonikError as error:
+                if error.info.category is ErrorCategory.RESOURCE:
+                    # Запрос не покинул Monik: ресурс закрыт или очередь не
+                    # дождалась. К ответам провайдера это не относится.
+                    self.statistics.refused += 1
+                    attempt = QuoteAttempt(
+                        provider_id=adapter.provider_id,
+                        operation=request.operation,
+                        error_category=error.info.category,
+                        error_message=error.info.message,
+                    )
+                    self.statistics.attempts.append(attempt)
+                    _LOGGER.info(
+                        "quote request was not sent",
+                        extra=log_fields(
+                            error_code=error.info.code,
+                            detail=error.info.message,
+                        ),
+                    )
+                    return attempt
+                self.statistics.requests += 1
                 self.statistics.failed += 1
                 attempt = QuoteAttempt(
                     provider_id=adapter.provider_id,
@@ -204,6 +230,7 @@ class QuoteCollector:
             max_age=self._max_age,
         )
         if reason is not None:
+            self.statistics.requests += 1
             self.statistics.failed += 1
             attempt = QuoteAttempt(
                 provider_id=adapter.provider_id,
@@ -215,6 +242,7 @@ class QuoteCollector:
             _LOGGER.info("quote rejected", extra=log_fields(reason=reason))
             return attempt
 
+        self.statistics.requests += 1
         self.statistics.successful += 1
         self._no_route.forget(self._capability_key(adapter.provider_id, request))
         attempt = QuoteAttempt(

@@ -64,9 +64,14 @@ class ScanStatistics(DomainModel):
     хранится только агрегированная статистика.
     """
 
+    #: Запросы, действительно отправленные провайдерам. Отказ собственного
+    #: предохранителя сюда не входит: иначе успешность цикла зависела бы
+    #: от состояния Monik, а не от ответов агрегаторов.
     quote_requests: int = Field(default=0, ge=0)
     successful_quotes: int = Field(default=0, ge=0)
     failed_quotes: int = Field(default=0, ge=0)
+    #: Запросы, не отправленные из-за закрытого ресурса или очереди.
+    refused_requests: int = Field(default=0, ge=0)
     skipped_combinations: int = Field(default=0, ge=0)
     deduplicated_requests: int = Field(default=0, ge=0)
     opportunities_created: int = Field(default=0, ge=0)

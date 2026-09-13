@@ -10,7 +10,7 @@ Capability Registry (``05_RESOURCE_MANAGER.md`` §11): временный сбо
 
 from __future__ import annotations
 
-from monik.config.sections.resources import CircuitBreakerConfig
+from monik.config.sections.resources import CircuitBreakerConfig, CooldownStep
 from monik.domain.enums.resources import CircuitState
 from monik.services.observability.clock import Clock
 
@@ -28,6 +28,9 @@ class CircuitBreaker:
         self._successes = 0
         self._opened_at: float | None = None
         self._half_open_calls = 0
+        #: Сколько раз подряд ресурс открывался из-за исчерпанного лимита.
+        #: Пауза перед следующей пробой растёт вместе с этим счётчиком.
+        self._rate_limit_openings = 0
 
     @property
     def state(self) -> CircuitState:
@@ -105,18 +108,32 @@ class CircuitBreaker:
             return
         self._failures = 0
 
-    def on_failure(self) -> None:
-        """Учесть неуспешную операцию."""
+    def on_failure(self, *, rate_limited: bool = False) -> None:
+        """Учесть неуспешную операцию.
+
+        ``rate_limited`` означает, что ресурс отказал именно по лимиту
+        запросов. Это не временный сбой: квота восстанавливается не
+        секундами, а часами, и частые пробы всё это время только
+        расходуют её остаток. Такой отказ удлиняет паузу перед следующей
+        пробой по лестнице охлаждения, остальные — нет.
+        """
         if not self._config.enabled:
             return
         if self.state is CircuitState.HALF_OPEN:
-            self._open()
+            self._open(rate_limited=rate_limited)
             return
         self._failures += 1
         if self._failures >= self._config.failure_threshold:
-            self._open()
+            self._open(rate_limited=rate_limited)
 
-    def _open(self) -> None:
+    def _open(self, *, rate_limited: bool = False) -> None:
+        if rate_limited:
+            self._rate_limit_openings += 1
+        else:
+            # Обычный отказ означает, что дело уже не в квоте: лестница
+            # начинается заново, иначе исправный ресурс наследовал бы
+            # многочасовую паузу от давнего превышения лимита.
+            self._rate_limit_openings = 0
         self._state = CircuitState.OPEN
         self._opened_at = self._clock.monotonic()
         self._failures = 0
@@ -129,9 +146,39 @@ class CircuitBreaker:
         self._failures = 0
         self._successes = 0
         self._half_open_calls = 0
+        self._rate_limit_openings = 0
 
     def _recovery_elapsed(self) -> bool:
         if self._opened_at is None:
             return True
         elapsed = self._clock.monotonic() - self._opened_at
-        return elapsed >= self._config.recovery_timeout_seconds
+        return elapsed >= self._cooldown_seconds()
+
+    def _cooldown_seconds(self) -> float:
+        """Пауза до следующей пробы.
+
+        Для обычного отказа она постоянна. Для исчерпанного лимита берётся
+        очередная ступень лестницы: первые пробы частые — ограничение
+        могло оказаться мгновенным, — дальше всё реже. Последняя ступень
+        повторяется, поэтому попытки не прекращаются совсем и ресурс
+        вернётся в строй сам, когда квота восстановится.
+        """
+        if self._rate_limit_openings == 0:
+            return self._config.recovery_timeout_seconds
+        return _step_seconds(
+            self._config.rate_limit_cooldown,
+            self._rate_limit_openings,
+            default=self._config.recovery_timeout_seconds,
+        )
+
+
+def _step_seconds(ladder: tuple[CooldownStep, ...], opening: int, *, default: float) -> float:
+    """Пауза для ``opening``-го подряд открытия (нумерация с единицы)."""
+    if not ladder:
+        return default
+    remaining = opening
+    for step in ladder:
+        if remaining <= step.attempts:
+            return step.seconds
+        remaining -= step.attempts
+    return ladder[-1].seconds

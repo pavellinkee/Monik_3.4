@@ -8,7 +8,7 @@ from pydantic import Field, model_validator
 
 from monik.config.base import ConfigSection
 
-__all__ = ["CircuitBreakerConfig", "ResourceConfig", "RetryConfig"]
+__all__ = ["CircuitBreakerConfig", "CooldownStep", "ResourceConfig", "RetryConfig"]
 
 
 class RetryConfig(ConfigSection):
@@ -36,6 +36,17 @@ class RetryConfig(ConfigSection):
         return self
 
 
+class CooldownStep(ConfigSection):
+    """Ступень охлаждения: сколько проб подряд и с какой паузой.
+
+    Последняя ступень повторяется бесконечно: лестница описывает, как
+    редеть попыткам, а не когда прекращать их совсем.
+    """
+
+    attempts: int = Field(default=1, ge=1, le=1000)
+    seconds: float = Field(default=30.0, gt=0, le=86_400)
+
+
 class CircuitBreakerConfig(ConfigSection):
     """Параметры circuit breaker (``12_RESOURCE_MANAGER.md`` §31-35).
 
@@ -48,6 +59,23 @@ class CircuitBreakerConfig(ConfigSection):
     recovery_timeout_seconds: float = Field(default=30.0, gt=0, le=3600)
     half_open_max_calls: int = Field(default=1, ge=1, le=50)
     success_threshold: int = Field(default=2, ge=1, le=50)
+    #: Лестница охлаждения для исчерпанного лимита запросов.
+    #:
+    #: Превышение лимита — не то же самое, что временный сбой. Сбой
+    #: проходит за секунды, а квота восстанавливается часами, и пробы
+    #: каждые 30 секунд всё это время только расходуют её остаток. Для
+    #: этой категории пробы редеют: сначала часто — вдруг ограничение
+    #: было мгновенным, — затем всё реже.
+    #:
+    #: Ступени применяются по порядку, последняя повторяется бесконечно.
+    #: На остальные отказы лестница не влияет: там действует
+    #: ``recovery_timeout_seconds``.
+    rate_limit_cooldown: tuple[CooldownStep, ...] = (
+        CooldownStep(attempts=10, seconds=30.0),
+        CooldownStep(attempts=10, seconds=300.0),
+        CooldownStep(attempts=1, seconds=1800.0),
+        CooldownStep(attempts=1, seconds=7200.0),
+    )
 
 
 class ResourceConfig(ConfigSection):

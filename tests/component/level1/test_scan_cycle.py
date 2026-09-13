@@ -18,7 +18,7 @@ from monik.domain.enums.lifecycle import JobStatus, OpportunityStatus, ScanStatu
 from monik.domain.enums.operations import OperationType
 from monik.domain.enums.providers import ProviderId
 from monik.domain.enums.resources import RequestPriority
-from monik.domain.errors import RateLimitError
+from monik.domain.errors import NoRouteError, RateLimitError, ResourceError
 from monik.domain.errors import TimeoutError as MonikTimeoutError
 from monik.infrastructure.db import Database
 from monik.infrastructure.providers.fake import FakeAdapter
@@ -521,6 +521,84 @@ async def test_opportunity_and_job_expire(harness: Level1Harness) -> None:
     assert opportunity.expires_at == opportunity.detected_at + timedelta(seconds=ttl)
     assert not opportunity.is_expired(f.NOW)
     assert job.expires_at > job.created_at
+
+
+class TestHonestCounters:
+    """Отказ предохранителя и отказ провайдера — разные вещи.
+
+    Запрос, который не покинул Monik, не говорит ничего о работе
+    агрегатора. Если считать его неудачной котировкой, открытый circuit
+    breaker выглядит как отказ провайдера: успешность цикла падает, хотя
+    все ответившие агрегаторы ответили нормально.
+    """
+
+    async def test_unsent_requests_do_not_count_as_provider_failures(
+        self, database: Database, clock: FakeClock
+    ) -> None:
+        configuration = parse_configuration(level1_document(), environ=dict(VALID_ENV)).config
+        adapters = {
+            ProviderId.ONEINCH: FakeAdapter(
+                ProviderId.ONEINCH, clock, output_rule=arbitrage_rule("0.050", "20.00")
+            ),
+            ProviderId.ZERO_X: FakeAdapter(
+                ProviderId.ZERO_X,
+                clock,
+                error=ResourceError(
+                    "circuit breaker is open for zero_x/polygon/quote_buy",
+                    code="resource_circuit_open",
+                ),
+            ),
+        }
+        harness = build_harness(configuration, database, clock, adapters=adapters)
+
+        statistics = (await harness.scanner.scan()).scan.statistics
+
+        assert statistics.refused_requests > 0
+        assert statistics.failed_quotes == 0
+        # Отправленные запросы и ответы на них сходятся между собой.
+        assert statistics.quote_requests == statistics.successful_quotes
+        assert statistics.successful_quotes > 0
+
+    async def test_provider_refusal_still_counts_as_a_failure(
+        self, database: Database, clock: FakeClock
+    ) -> None:
+        """Ответ агрегатора «нет маршрута» остаётся его отказом."""
+        configuration = parse_configuration(level1_document(), environ=dict(VALID_ENV)).config
+        adapters = {
+            ProviderId.ONEINCH: FakeAdapter(
+                ProviderId.ONEINCH, clock, output_rule=arbitrage_rule("0.050", "20.00")
+            ),
+            ProviderId.ZERO_X: FakeAdapter(
+                ProviderId.ZERO_X,
+                clock,
+                error=NoRouteError("no liquidity", code="provider_no_route"),
+            ),
+        }
+        harness = build_harness(configuration, database, clock, adapters=adapters)
+
+        statistics = (await harness.scanner.scan()).scan.statistics
+
+        assert statistics.failed_quotes > 0
+        assert statistics.refused_requests == 0
+
+    async def test_cycle_with_unsent_requests_is_not_reported_as_complete(
+        self, database: Database, clock: FakeClock
+    ) -> None:
+        """Часть комбинаций не посчитана, и цикл это признаёт."""
+        configuration = parse_configuration(level1_document(), environ=dict(VALID_ENV)).config
+        adapters = {
+            ProviderId.ONEINCH: FakeAdapter(
+                ProviderId.ONEINCH, clock, output_rule=arbitrage_rule("0.050", "20.00")
+            ),
+            ProviderId.ZERO_X: FakeAdapter(
+                ProviderId.ZERO_X,
+                clock,
+                error=ResourceError("circuit breaker is open", code="resource_circuit_open"),
+            ),
+        }
+        harness = build_harness(configuration, database, clock, adapters=adapters)
+
+        assert (await harness.scanner.scan()).scan.status is ScanStatus.PARTIAL
 
 
 class TestBestCombination:

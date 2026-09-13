@@ -139,7 +139,7 @@ class SystemNotifier:
         # Состояния провайдеров и подсистем уже сообщены сообщением о
         # запуске: повторять их отдельными уведомлениями не нужно.
         self._prime(summary.health, now)
-        sent = await self._send(startup_text(summary))
+        sent = await self._send(startup_text(summary), subject="startup")
         if sent:
             await self._remember_startup(now)
         return sent
@@ -165,7 +165,9 @@ class SystemNotifier:
         # Отметка ставится до отправки: недоставленное сообщение не должно
         # приводить к повторным попыткам на каждом следующем пути остановки.
         self._stop_reported = True
-        return await self._send(scanner_stopped_text(reason, detail=detail))
+        return await self._send(
+            scanner_stopped_text(reason, detail=detail), subject="scanner_stopped"
+        )
 
     async def notify_pending_updates(
         self,
@@ -190,7 +192,8 @@ class SystemNotifier:
         if apply_action is not None:
             buttons = ((MessageButton(label=UPDATE_BUTTON_LABEL, callback_data=apply_action),),)
         return await self._send(
-            pending_updates_text(
+            subject="pending_updates",
+            text=pending_updates_text(
                 updates,
                 apply_command=apply_command,
                 with_button=apply_action is not None,
@@ -279,7 +282,7 @@ class SystemNotifier:
         else:
             text = aggregated_text(subject, status, errors=max(failures - previous.failures, 0))
 
-        if await self._send(text):
+        if await self._send(text, subject=subject):
             sent.append(key)
             self._reported[key] = _Reported(status, now, failures)
 
@@ -320,7 +323,11 @@ class SystemNotifier:
         await self._state.set(STARTUP_NOTIFIED_KEY, now.isoformat(), updated_at=now)
 
     async def _send(
-        self, text: str, *, buttons: tuple[tuple[MessageButton, ...], ...] = ()
+        self,
+        text: str,
+        *,
+        subject: str,
+        buttons: tuple[tuple[MessageButton, ...], ...] = (),
     ) -> bool:
         """Отправить сообщение, не позволяя сбою доставки уронить вызвавшего.
 
@@ -345,7 +352,16 @@ class SystemNotifier:
                     error_kind=receipt.error_kind.value if receipt.error_kind else None
                 ),
             )
-        return receipt.delivered
+            return False
+        # Успешная отправка тоже попадает в журнал: без этой записи по
+        # логам невозможно отличить «сообщение не отправляли» от
+        # «отправили, но оператор его не увидел». Текст не пишется —
+        # в журнал уходит только факт и его повод.
+        _LOGGER.info(
+            "system notification delivered",
+            extra=log_fields(subject=subject, notification_id=receipt.external_message_id),
+        )
+        return True
 
     def _now(self) -> UtcDatetime:
         return self._clock.now()

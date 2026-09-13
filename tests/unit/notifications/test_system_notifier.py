@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 
 import pytest
@@ -494,3 +495,69 @@ class TestPendingUpdates:
 
         assert not await notifier.notify_pending_updates((), apply_command="sudo apt upgrade")
         assert transport.sent == []
+
+
+class _CapturedLog:
+    """Записи одного логгера.
+
+    Вывод Monik настраивается своим обработчиком и не всплывает в
+    корневой логгер, поэтому ``caplog`` его не видит: запись
+    перехватывается прямо у нужного логгера.
+    """
+
+    def __init__(self, name: str) -> None:
+        self._logger = logging.getLogger(name)
+        self.records: list[logging.LogRecord] = []
+        self._handler = logging.Handler()
+        self._handler.emit = self.records.append  # type: ignore[method-assign]
+        self._level = self._logger.level
+
+    def __enter__(self) -> _CapturedLog:
+        self._logger.addHandler(self._handler)
+        self._logger.setLevel(logging.INFO)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._logger.removeHandler(self._handler)
+        self._logger.setLevel(self._level)
+
+    @property
+    def messages(self) -> list[str]:
+        return [record.getMessage() for record in self.records]
+
+
+class TestDeliveryLogging:
+    """Успешная отправка тоже попадает в журнал.
+
+    Без этой записи по логам нельзя отличить «сообщение не отправляли» от
+    «отправили, но оператор его не увидел», и любой разбор инцидента
+    превращается в гадание.
+    """
+
+    async def test_successful_delivery_is_logged(self) -> None:
+        transport = FakeTransport()
+        notifier = _notifier(transport, FakeClock(f.NOW))
+
+        with _CapturedLog("monik.services.notifications.system") as log:
+            assert await notifier.notify_scanner_stopped(ScannerStopReason.OPERATOR)
+
+        assert "system notification delivered" in log.messages
+
+    async def test_rejected_delivery_is_not_reported_as_sent(self) -> None:
+        transport = FakeTransport(
+            receipt=DeliveryReceipt(delivered=False, error_kind=DeliveryErrorKind.AUTH_ERROR)
+        )
+        notifier = _notifier(transport, FakeClock(f.NOW))
+
+        assert not await notifier.notify_scanner_stopped(ScannerStopReason.OPERATOR)
+
+    async def test_delivered_message_text_stays_out_of_the_log(self) -> None:
+        """В журнал уходит факт и повод, а не содержимое сообщения."""
+        transport = FakeTransport()
+        notifier = _notifier(transport, FakeClock(f.NOW))
+
+        with _CapturedLog("monik.services.notifications.system") as log:
+            await notifier.notify_scanner_stopped(ScannerStopReason.OPERATOR)
+
+        text = transport.sent[0].text
+        assert all(text not in message for message in log.messages)

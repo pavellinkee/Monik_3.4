@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from monik.config.sections.resources import ResourceConfig
+from monik.domain.enums.errors import ErrorCategory
 from monik.domain.enums.resources import CircuitState, ResourceResultStatus
 from monik.domain.errors import MonikError, ResourceError, TimeoutError
 from monik.domain.errors.base import ErrorInfo
@@ -301,7 +302,7 @@ class ResourceManager:
         создаётся.
         """
         if error.category in RETRYABLE_CATEGORIES:
-            breaker.on_failure()
+            breaker.on_failure(rate_limited=error.category is ErrorCategory.RATE_LIMIT)
 
     async def _await_rate_limit(self, request: ResourceRequest) -> None:
         """Дождаться разрешения rate limiter'а.
