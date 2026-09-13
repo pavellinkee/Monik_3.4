@@ -36,7 +36,9 @@ providers:
     requests_per_second: 0.9
 
   - provider_id: zero_x
-    enabled: true
+    # Отключён 13.09: исчерпан лимит запросов бесплатного плана, API
+    # отвечает 403. Возврат — по решению оператора, одной строкой.
+    enabled: false
     # Покупка и продажа у этого агрегатора. Разрешение двухуровневое:
     # глобальное routes.allow_same_provider плюс согласие провайдера.
     allow_same_provider_round_trip: true
