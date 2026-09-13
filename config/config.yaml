@@ -350,10 +350,10 @@ scanner:
 profitability:
   threshold_metric: net_roi
   # Порог подтверждения Level 2: возможность должна остаться выгодной на
-  # свежих данных. Сравнение >=, ровно 0.05 % проходит.
-  final_threshold_percent: "0.05"
+  # свежих данных. Сравнение >=, ровно 0.01 % проходит.
+  final_threshold_percent: "0.01"
   # Порог поиска Level 1: ниже него возможность не создаётся.
-  preliminary_threshold_percent: "0.05"
+  preliminary_threshold_percent: "0.01"
 
 fees:
   enabled: true
