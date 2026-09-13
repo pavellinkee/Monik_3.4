@@ -296,7 +296,13 @@ def build_container(
     calculator = ProfitCalculator(clock)
     transitions = TransitionRecorder(repositories.transitions, clock)
 
-    formatter = MessageFormatter(config.notifications, tokens)
+    formatter = MessageFormatter(
+        config.notifications,
+        tokens,
+        providers=providers,
+        networks=networks,
+        timezone=config.application.timezone,
+    )
     opportunities = OpportunityService(
         publisher=repositories.confirmations,
         notifications=repositories.notifications,

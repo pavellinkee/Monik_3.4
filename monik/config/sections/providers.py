@@ -77,6 +77,12 @@ class ProviderConfig(ConfigSection):
     #: из-за одного нельзя. ``None`` означает «как у всех».
     min_interval_seconds: float | None = Field(default=None, ge=0, le=10)
     allow_same_provider_round_trip: bool = False
+    #: Значок агрегатора в уведомлении. Свойство конкретного провайдера,
+    #: поэтому описано здесь, а не в общем формате сообщения.
+    emoji: str | None = Field(default=None, min_length=1, max_length=8)
+    #: Страница агрегатора, на которой оператор подключает кошелёк и
+    #: совершает обмен. В уведомлении подставляется вместо названия.
+    ui_url: str | None = Field(default=None, max_length=512)
     #: Часы работы провайдера. Вне окна Level 1 его не опрашивает.
     #:
     #: Нужно там, где у провайдера своя дневная квота: расход ограничивают
@@ -91,6 +97,8 @@ class ProviderConfig(ConfigSection):
     def _validate(self) -> Self:
         if self.base_url is not None and not self.base_url.startswith("https://"):
             raise ValueError("provider base_url must use https")
+        if self.ui_url is not None and not self.ui_url.startswith("https://"):
+            raise ValueError("provider ui_url must use https")
         if self.enabled and not self.supported_networks:
             raise ValueError(
                 f"provider {self.provider_id.value} is enabled but declares no supported networks"

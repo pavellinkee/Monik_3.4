@@ -29,7 +29,7 @@ from monik.services.notifications import MessageFormatter, NotificationDispatche
 from monik.services.observability import FakeClock
 from monik.services.observability.metrics import MetricsRegistry
 from monik.services.opportunity import OpportunityService, build_snapshot
-from monik.services.registries import TokenRegistry
+from monik.services.registries import NetworkRegistry, ProviderRegistry, TokenRegistry
 from tests import factories as f
 from tests.component.level1.conftest import level1_document
 from tests.component.level2.conftest import build_level2
@@ -121,7 +121,13 @@ async def build_notifications(
     level2 = await build_level2(config, database, clock, metrics=metrics)
     result = await level2.scanner.confirm(level2.job)
     tokens = TokenRegistry(config)
-    formatter = MessageFormatter(config.notifications, tokens)
+    formatter = MessageFormatter(
+        config.notifications,
+        tokens,
+        providers=ProviderRegistry(config),
+        networks=NetworkRegistry(config),
+        timezone=config.application.timezone,
+    )
     service = OpportunityService(
         publisher=SqliteConfirmationRepository(database),
         notifications=SqliteNotificationRepository(database),

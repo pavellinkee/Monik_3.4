@@ -32,10 +32,21 @@ class NetworkRegistry:
             for network in configuration.networks
         }
         self._rpc_urls = {network.network_id: network.rpc_url for network in configuration.networks}
+        #: Значок сети для уведомлений: свойство сети, а не формата.
+        self._emoji = {network.network_id: network.emoji for network in configuration.networks}
 
     def get(self, network_id: NetworkId) -> Network | None:
         """Найти сеть по идентификатору."""
         return self._networks.get(network_id)
+
+    def emoji(self, network_id: NetworkId) -> str | None:
+        """Значок сети, если он задан."""
+        return self._emoji.get(network_id)
+
+    def display_name(self, network_id: NetworkId) -> str:
+        """Название сети для оператора; без настройки — идентификатор."""
+        network = self._networks.get(network_id)
+        return network.name if network is not None else str(network_id)
 
     def require(self, network_id: NetworkId) -> Network:
         """Найти сеть или сообщить об ошибке конфигурации."""

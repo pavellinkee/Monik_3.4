@@ -12,6 +12,7 @@ from monik.domain.enums.notifications import NotificationMode
 
 __all__ = [
     "NotificationConfig",
+    "NotificationEmojiConfig",
     "NotificationModeRules",
     "SystemNotificationConfig",
     "TelegramConfig",
@@ -87,6 +88,26 @@ class TelegramConfig(ConfigSection):
         return self
 
 
+class NotificationEmojiConfig(ConfigSection):
+    """Значки уведомления о возможности.
+
+    Здесь только те значки, которые принадлежат самому сообщению. Значок
+    агрегатора описан у агрегатора, значок сети — у сети: свойство живёт
+    там, где живёт его владелец.
+    """
+
+    #: Перед строкой направления обмена.
+    pair: str = Field(default="💱", min_length=1, max_length=8)
+    #: Перед суммой с наибольшим процентом доходности.
+    best_roi: str = Field(default="⭐", min_length=1, max_length=8)
+    #: Перед суммой с наибольшей прибылью в базовом токене.
+    best_profit: str = Field(default="💎", min_length=1, max_length=8)
+    #: В начале строки суммы, не получившей подтверждения.
+    partial: str = Field(default="⚠️", min_length=1, max_length=8)
+    #: Перед временем завершения проверки Level 2.
+    time: str = Field(default="⌚", min_length=1, max_length=8)
+
+
 class NotificationConfig(ConfigSection):
     """Общие параметры уведомлений (``17_CONFIGURATION.md`` §45).
 
@@ -108,6 +129,7 @@ class NotificationConfig(ConfigSection):
     retry_max_delay_seconds: float = Field(default=300.0, gt=0, le=3600)
     deduplication_window_seconds: int = Field(default=3600, ge=0, le=86_400)
     show_calculation_version: bool = False
+    emoji: NotificationEmojiConfig = NotificationEmojiConfig()
     mode_a: NotificationModeRules = NotificationModeRules()
     mode_b: NotificationModeRules = NotificationModeRules()
     telegram: TelegramConfig = TelegramConfig()

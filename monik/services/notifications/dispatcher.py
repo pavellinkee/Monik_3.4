@@ -24,7 +24,7 @@ from monik.domain.enums.notifications import DeliveryErrorKind
 from monik.domain.models.notification import Notification, NotificationAttempt
 from monik.domain.value_objects.identifiers import OpportunityId
 from monik.domain.value_objects.timestamps import UtcDatetime
-from monik.services.notifications.formatter import DETAILS_BUTTON_LABEL
+from monik.services.notifications.formatter import DETAILS_BUTTON_LABEL, MESSAGE_PARSE_MODE
 from monik.services.notifications.ports import (
     DeliveryReceipt,
     NotificationStore,
@@ -169,6 +169,9 @@ class NotificationDispatcher:
                 OutgoingMessage(
                     destination=destination,
                     text=message_text,
+                    # Текст готовит MessageFormatter, он же задаёт разметку:
+                    # рассогласовать их невозможно.
+                    parse_mode=MESSAGE_PARSE_MODE,
                     # Кнопка «об» присутствует в каждом уведомлении
                     # (``CLAUDE.md`` §35).
                     details_callback=details_callback_data(notification.notification_id),

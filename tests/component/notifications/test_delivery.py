@@ -6,11 +6,18 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from decimal import Decimal
 
 import pytest
 
-from monik.domain.enums.lifecycle import NotificationStatus, OpportunityStatus
+from monik.domain.enums.lifecycle import (
+    AmountConfirmationStatus,
+    NotificationStatus,
+    OpportunityStatus,
+)
 from monik.domain.enums.notifications import DeliveryErrorKind, NotificationMode
+from monik.domain.models.confirmation import AmountSnapshot, ConfirmationSnapshot
+from monik.domain.value_objects.amounts import Percentage
 from monik.infrastructure.db import Database
 from monik.infrastructure.telegram import FakeTransport
 from monik.services.notifications import (
@@ -42,18 +49,26 @@ async def harness(database: Database, clock: FakeClock) -> NotificationHarness:
 async def test_message_starts_with_level2_id(harness: NotificationHarness) -> None:
     """Level 2 ID показывается сверху (``CLAUDE.md`` §35)."""
     text = harness.formatter.render_message(harness.snapshot)
-    assert text.splitlines()[0].startswith(str(harness.result.k_id))
+    assert text.splitlines()[0] == str(harness.result.k_id).lower()
 
 
 async def test_message_contains_required_fields(harness: NotificationHarness) -> None:
-    """Сеть, пара токенов, суммы, провайдеры и прибыль (§37-43)."""
+    """Сеть, пара токенов, обе ноги, суммы и время (§37-43)."""
     text = harness.formatter.render_message(harness.snapshot)
-    assert "Сеть: polygon" in text
-    assert "USDT → AAVE → USDT" in text
-    assert harness.snapshot.buy_provider_id.value in text
-    assert harness.snapshot.sell_provider_id.value in text
-    assert "прибыль" in text
-    assert "ROI" in text
+    lines = text.splitlines()
+
+    assert lines[1] == ""
+    assert "Polygon" in lines[2]
+    assert lines[3].endswith("USDT → AAVE → USDT")
+    assert lines[4] == "-"
+    assert lines[5] == "BUY"
+    assert harness.snapshot.buy_provider_id.value in lines[6]
+    assert lines[7] == "SELL"
+    assert harness.snapshot.sell_provider_id.value in lines[8]
+    assert lines[9] == "•••"
+    assert "-------------" in text
+    # Время завершения проверки — последней строкой.
+    assert lines[-1].endswith(harness.snapshot.confirmed_at.strftime("%H:%M:%S"))
 
 
 async def test_details_text_contains_route_and_costs(harness: NotificationHarness) -> None:
@@ -73,22 +88,24 @@ async def test_formatter_does_not_recalculate(harness: NotificationHarness) -> N
     assert amount.net_profit is not None and amount.net_roi is not None
     text = harness.formatter.render_message(harness.snapshot)
 
-    places = harness.configuration.notifications.decimal_places
-    expected_profit = f"{amount.net_profit:.{places}f}"
-    expected_roi = f"{amount.net_roi.value:.{places}f}"
-    assert expected_profit in text
-    assert expected_roi in text
+    # Формат оператора: знак и два знака после запятой.
+    assert f"{amount.net_profit:+.2f}" in text
+    assert f"{amount.net_roi.value:+.2f}" in text
     # Округление выполнено только для отображения: снимок не изменился.
     assert harness.snapshot.amounts[0].net_profit == amount.net_profit
 
 
 async def test_display_precision_is_configurable(database: Database, clock: FakeClock) -> None:
-    """Точность отображения задаётся конфигурацией (§49)."""
-    harness = await build_notifications(database, clock, configuration=configured(decimal_places=2))
-    text = harness.formatter.render_message(harness.snapshot)
+    """Точность разбивки задаётся конфигурацией (§49).
+
+    Основное сообщение показывает две цифры после запятой по решению
+    оператора, а подробная раскладка кнопки ``об`` остаётся настраиваемой.
+    """
+    harness = await build_notifications(database, clock, configuration=configured(decimal_places=4))
+    details = harness.formatter.render_details(harness.snapshot)
     amount = harness.snapshot.amounts[0]
     assert amount.net_profit is not None
-    assert f"{amount.net_profit:.2f}" in text
+    assert f"{amount.net_profit:.4f}" in details
 
 
 # --- очередь и доставка ---------------------------------------------------
@@ -363,3 +380,171 @@ async def test_mode_decision_uses_the_snapshot(harness: NotificationHarness) -> 
     )
     assert decision.send is True
     assert decision.reason is None
+
+
+# --- формат уведомления оператора ----------------------------------------
+
+
+class TestOperatorFormat:
+    """Вид сообщения задан оператором и проверяется поэлементно.
+
+    Ссылка на страницу обмена важнее названия агрегатора: по ней оператор
+    и совершает сделку, поэтому в сообщение идёт именно она.
+    """
+
+    def _render(self, harness: NotificationHarness) -> str:
+        return harness.formatter.render_message(harness.snapshot)
+
+    async def test_provider_links_replace_names(
+        self, database: Database, clock: FakeClock
+    ) -> None:
+        configuration = configured()
+        for provider in configuration.providers:
+            object.__setattr__(provider, "emoji", "🧩")
+            object.__setattr__(provider, "ui_url", "https://example.org/swap")
+        harness = await build_notifications(database, clock, configuration=configuration)
+
+        text = self._render(harness)
+
+        assert "🧩 https://example.org/swap" in text
+
+    async def test_provider_without_a_link_falls_back_to_its_name(
+        self, harness: NotificationHarness
+    ) -> None:
+        """Ссылки может не быть — сообщение остаётся осмысленным."""
+        text = self._render(harness)
+
+        assert harness.snapshot.buy_provider_id.value in text
+
+    async def test_amounts_are_round_and_values_signed(
+        self, harness: NotificationHarness
+    ) -> None:
+        text = self._render(harness)
+        amount = harness.snapshot.amounts[0]
+        assert amount.net_roi is not None
+
+        label = f"{amount.input_amount.as_decimal.normalize():f}"
+        assert f"{label} USDT" in text
+        assert "." not in label
+        assert f"{amount.net_roi.value:+.2f}%" in text
+
+    async def test_best_roi_and_best_profit_are_marked(
+        self, harness: NotificationHarness
+    ) -> None:
+        """Лучший процент и лучшая прибыль — разные вопросы и разные значки."""
+        emoji = harness.configuration.notifications.emoji
+        text = self._render(harness)
+
+        assert emoji.best_roi in text
+        assert emoji.best_profit in text
+
+    @staticmethod
+    def _with_amounts(
+        harness: NotificationHarness, *amounts: AmountSnapshot
+    ) -> ConfirmationSnapshot:
+        """Снимок с заданным набором сумм."""
+        return harness.snapshot.model_copy(update={"amounts": amounts})
+
+    @staticmethod
+    def _amount(
+        template: AmountSnapshot,
+        *,
+        raw: int,
+        roi: str,
+        profit: str,
+        confirmed: bool = True,
+        reason: str | None = None,
+    ) -> AmountSnapshot:
+        """Сумма с заданными результатом и статусом."""
+        return template.model_copy(
+            update={
+                "input_amount": template.input_amount.model_copy(update={"raw": raw}),
+                "net_roi": Percentage(value=Decimal(roi)),
+                "net_profit": Decimal(profit),
+                "confirmation_status": (
+                    AmountConfirmationStatus.CONFIRMED
+                    if confirmed
+                    else AmountConfirmationStatus.UNCONFIRMED
+                ),
+                "rejection_reason": reason,
+            }
+        )
+
+    async def test_unconfirmed_amount_keeps_its_numbers(
+        self, harness: NotificationHarness
+    ) -> None:
+        """Отсутствие подтверждения — повод для пометки, а не для молчания."""
+        template = harness.snapshot.amounts[0]
+        snapshot = self._with_amounts(
+            harness,
+            self._amount(template, raw=50_000_000, roi="0.40", profit="0.20"),
+            self._amount(
+                template,
+                raw=1_000_000_000,
+                roi="-0.07",
+                profit="-0.70",
+                confirmed=False,
+                reason="net result is below the profitability threshold",
+            ),
+        )
+
+        text = harness.formatter.render_message(snapshot)
+
+        assert "⚠️ " in text
+        assert "**partial" in text
+        assert "-0.07%" in text
+        assert "-0.70 USDT" in text
+        # Пояснение переведено и показано мельче основного текста.
+        assert "<i>(итог ниже порога прибыльности)</i>" in text
+
+    async def test_unknown_reason_is_shown_as_is(self, harness: NotificationHarness) -> None:
+        """Незнакомую причину не переводим наугад."""
+        template = harness.snapshot.amounts[0]
+        snapshot = self._with_amounts(
+            harness,
+            self._amount(
+                template,
+                raw=50_000_000,
+                roi="0.10",
+                profit="0.05",
+                confirmed=False,
+                reason="provider says something new",
+            ),
+        )
+
+        text = harness.formatter.render_message(snapshot)
+
+        assert "provider says something new" in text
+
+    async def test_marks_go_to_different_amounts(self, harness: NotificationHarness) -> None:
+        """Лучший процент и лучшая прибыль обычно у разных сумм."""
+        template = harness.snapshot.amounts[0]
+        snapshot = self._with_amounts(
+            harness,
+            self._amount(template, raw=50_000_000, roi="0.40", profit="0.20"),
+            self._amount(template, raw=1_000_000_000, roi="0.10", profit="1.00"),
+        )
+
+        lines = harness.formatter.render_message(snapshot).splitlines()
+        roi_line = next(line for line in lines if "⭐" in line)
+        profit_line = next(line for line in lines if "💎" in line)
+
+        assert roi_line.endswith("50 USDT")
+        assert profit_line.endswith("1000 USDT")
+
+    async def test_tie_is_marked_on_the_larger_amount(
+        self, harness: NotificationHarness
+    ) -> None:
+        """Равные значения: отмечается большая сумма, выбор детерминирован."""
+        template = harness.snapshot.amounts[0]
+        snapshot = self._with_amounts(
+            harness,
+            self._amount(template, raw=50_000_000, roi="0.20", profit="0.50"),
+            self._amount(template, raw=1_000_000_000, roi="0.20", profit="0.50"),
+        )
+
+        lines = harness.formatter.render_message(snapshot).splitlines()
+        marked = [line for line in lines if "⭐" in line or "💎" in line]
+
+        assert len(marked) == 1
+        assert marked[0].endswith("1000 USDT")

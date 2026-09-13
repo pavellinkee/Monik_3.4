@@ -441,7 +441,8 @@ async def test_successful_delivery_carries_the_details_button(
 
         assert transport.sent
         assert transport.sent[0].details_label == "об"
-        assert str(confirmations[0].k_id) in transport.sent[0].text
+        # Идентификатор показывается строчными по формату оператора.
+        assert str(confirmations[0].k_id).lower() in transport.sent[0].text
     finally:
         await started.app.shutdown()
         await started.database.close()

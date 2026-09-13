@@ -78,6 +78,10 @@ class TelegramNotificationAdapter:
             "text": message.text,
             "disable_web_page_preview": True,
         }
+        if message.parse_mode is not None:
+            # Разметку выбирает составитель сообщения: транспорт её не
+            # навязывает и не применяет к тем, кто её не просил.
+            payload["parse_mode"] = message.parse_mode
         markup = self._reply_markup(message)
         if markup is not None:
             payload["reply_markup"] = markup

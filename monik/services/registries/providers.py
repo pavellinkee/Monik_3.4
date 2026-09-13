@@ -36,6 +36,13 @@ class ProviderRegistry:
             for provider in configuration.providers
         }
         self._pairs = configuration.provider_pairs()
+        #: Оформление провайдера для уведомлений: значок и страница
+        #: обмена. Свойства конкретного провайдера, поэтому приходят из
+        #: его блока конфигурации, а не из формата сообщения.
+        self._presentation = {
+            provider.provider_id: (provider.emoji, provider.ui_url)
+            for provider in configuration.providers
+        }
         # Часы работы — особенность конкретного провайдера, поэтому она
         # описана у него в конфигурации и превращается здесь в общее
         # понятие «окно». Провайдер без расписания работает круглосуточно.
@@ -67,6 +74,14 @@ class ProviderRegistry:
         """
         provider = self.get(provider_id)
         return provider is not None and provider.enabled
+
+    def emoji(self, provider_id: ProviderId) -> str | None:
+        """Значок провайдера, если он задан."""
+        return self._presentation.get(provider_id, (None, None))[0]
+
+    def ui_url(self, provider_id: ProviderId) -> str | None:
+        """Страница обмена провайдера, если она задана."""
+        return self._presentation.get(provider_id, (None, None))[1]
 
     def window(self, provider_id: ProviderId) -> DailyWindow | None:
         """Окно работы провайдера, если оно задано."""

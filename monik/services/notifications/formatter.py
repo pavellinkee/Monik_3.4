@@ -14,45 +14,93 @@ Level 2 ID показывается сверху, а к каждому увед�
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from decimal import Decimal
+from html import escape
+from zoneinfo import ZoneInfo
 
 from monik.config.sections.notifications import NotificationConfig
+from monik.domain.enums.lifecycle import AmountConfirmationStatus
+from monik.domain.enums.providers import ProviderId
 from monik.domain.models.confirmation import AmountSnapshot, ConfirmationSnapshot
 from monik.domain.models.token import TokenKey
+from monik.services.notifications.reasons import describe_reason
+from monik.services.registries.networks import NetworkRegistry
+from monik.services.registries.providers import ProviderRegistry
 from monik.services.registries.tokens import TokenRegistry
 
-__all__ = ["DETAILS_BUTTON_LABEL", "MessageFormatter"]
+__all__ = ["DETAILS_BUTTON_LABEL", "MESSAGE_PARSE_MODE", "MessageFormatter"]
 
 #: Подпись кнопки, обязательной для каждого уведомления (``CLAUDE.md`` §35).
 DETAILS_BUTTON_LABEL = "об"
+
+#: Разметка, которой формируется текст уведомления о возможности. Объявлена
+#: здесь, а не в конфигурации: разметку выбирает тот, кто составляет текст,
+#: и рассогласовать их невозможно.
+MESSAGE_PARSE_MODE = "HTML"
+
+#: Сколько знаков после запятой показывается в процентах и суммах прибыли.
+_MONEY_PLACES = 2
+
+#: Разделительная линия перед временем завершения проверки.
+_SEPARATOR = "-------------"
+
+#: Отметка суммы, не получившей подтверждения.
+_PARTIAL_MARK = "**partial"
 
 
 class MessageFormatter:
     """Формирует текст уведомления и текст кнопки ``об`` из снимка."""
 
-    def __init__(self, config: NotificationConfig, tokens: TokenRegistry) -> None:
+    def __init__(
+        self,
+        config: NotificationConfig,
+        tokens: TokenRegistry,
+        *,
+        providers: ProviderRegistry,
+        networks: NetworkRegistry,
+        timezone: str | None = None,
+    ) -> None:
         self._config = config
         self._tokens = tokens
+        self._providers = providers
+        self._networks = networks
+        #: Пояс, в котором оператор читает время. Без него время осталось
+        #: бы в UTC и расходилось бы с журналом и его часами.
+        self._timezone = ZoneInfo(timezone) if timezone else None
 
     def render(self, snapshot: ConfirmationSnapshot) -> tuple[str, str]:
         """Вернуть основной текст и текст кнопки ``об``."""
         return (self.render_message(snapshot), self.render_details(snapshot))
 
     def render_message(self, snapshot: ConfirmationSnapshot) -> str:
-        """Основное сообщение об Opportunity."""
+        """Основное сообщение об Opportunity.
+
+        Порядок строк задан оператором: идентификатор, сеть, направление
+        обмена, страницы обеих ног, затем по блоку на каждую сумму и время
+        завершения проверки. Значения берутся из снимка как есть —
+        пересчёта здесь нет (``15_NOTIFICATION_SYSTEM.md`` §14, §50).
+        """
+        emoji = self._config.emoji
         lines = [
             # Level 2 ID располагается сверху (``CLAUDE.md`` §35).
-            f"{snapshot.k_id} ({snapshot.v_id})",
-            f"Сеть: {snapshot.network_id}",
-            f"Пара: {self._pair(snapshot)}",
-            f"BUY: {snapshot.buy_provider_id.value}",
-            f"SELL: {snapshot.sell_provider_id.value}",
-            f"Подтверждено: {snapshot.confirmed_at.isoformat()}",
+            escape(str(snapshot.k_id).lower()),
+            "",
+            self._network_line(snapshot),
+            f"{emoji.pair} {escape(self._pair(snapshot))}",
+            "-",
+            "BUY",
+            self._provider_line(snapshot.buy_provider_id),
+            "SELL",
+            self._provider_line(snapshot.sell_provider_id),
+            "•••",
         ]
+        highlights = _highlights(snapshot.amounts)
         for amount in snapshot.amounts:
-            lines.extend(self._amount_lines(snapshot, amount))
-        if self._config.show_calculation_version:
-            lines.append(f"Версия расчёта: {snapshot.formula_version}")
+            lines.append("")
+            lines.extend(self._amount_lines(snapshot, amount, highlights))
+        lines.extend(("", _SEPARATOR, f"{emoji.time} {self._local_time(snapshot)}"))
         return "\n".join(lines)
 
     def render_details(self, snapshot: ConfirmationSnapshot) -> str:
@@ -77,6 +125,29 @@ class MessageFormatter:
 
     # --- внутреннее -------------------------------------------------------
 
+    def _network_line(self, snapshot: ConfirmationSnapshot) -> str:
+        """Строка сети: её значок и название из конфигурации."""
+        emoji = self._networks.emoji(snapshot.network_id)
+        name = escape(self._networks.display_name(snapshot.network_id))
+        return f"{emoji} {name}" if emoji else name
+
+    def _provider_line(self, provider_id: ProviderId) -> str:
+        """Строка агрегатора: его значок и страница обмена.
+
+        Название подставляется только тогда, когда страница не задана:
+        оператору нужна ссылка, по которой он совершит обмен, а не имя.
+        """
+        emoji = self._providers.emoji(provider_id)
+        target = self._providers.ui_url(provider_id) or provider_id.value
+        return f"{emoji} {escape(target)}" if emoji else escape(target)
+
+    def _local_time(self, snapshot: ConfirmationSnapshot) -> str:
+        """Время завершения проверки в поясе оператора."""
+        moment = snapshot.confirmed_at
+        if self._timezone is not None:
+            moment = moment.astimezone(self._timezone)
+        return moment.strftime("%H:%M:%S")
+
     def _pair(self, snapshot: ConfirmationSnapshot) -> str:
         """Тройка токенов цикла (``15_NOTIFICATION_SYSTEM.md`` §38)."""
         return (
@@ -99,16 +170,41 @@ class MessageFormatter:
         steps = " → ".join(step.protocol for step in route.steps) or route.routing_mode.value
         return f"{route.provider_id.value} [{route.routing_mode.value}] {steps}"
 
-    def _amount_lines(self, snapshot: ConfirmationSnapshot, amount: AmountSnapshot) -> list[str]:
-        """Строки одной суммы (``15_NOTIFICATION_SYSTEM.md`` §39, §42-43)."""
-        input_symbol = self._symbol(snapshot.input_token)
-        header = f"{self._decimal(amount.input_amount.as_decimal)} {input_symbol}"
-        if not amount.is_confirmed:
-            return [f"{header}: не подтверждена ({amount.status.value})"]
-        return [
-            f"{header}: прибыль {self._optional(amount.net_profit)} {input_symbol}"
-            f" · ROI {self._roi(amount)}"
+    def _amount_lines(
+        self,
+        snapshot: ConfirmationSnapshot,
+        amount: AmountSnapshot,
+        highlights: _Highlights,
+    ) -> list[str]:
+        """Блок одной суммы.
+
+        Доходность и прибыль показываются **всегда**, независимо от того,
+        подтверждена сумма или нет: отсутствие подтверждения — причина
+        пометки, а не причина скрывать числа.
+        """
+        emoji = self._config.emoji
+        symbol = self._symbol(snapshot.input_token)
+        marks = []
+        confirmed = amount.confirmation_status is AmountConfirmationStatus.CONFIRMED
+        if not confirmed:
+            marks.append(emoji.partial)
+        if amount is highlights.best_roi:
+            marks.append(emoji.best_roi)
+        if amount is highlights.best_profit:
+            marks.append(emoji.best_profit)
+        prefix = "".join(f"{mark} " for mark in marks)
+        suffix = "" if confirmed else f" {_PARTIAL_MARK}"
+        lines = [
+            f"{prefix}{_amount_label(amount)} {escape(symbol)}{suffix}",
+            _signed(amount.net_roi.value if amount.net_roi is not None else None, suffix="%"),
+            _signed(amount.net_profit, suffix=f" {escape(symbol)}"),
         ]
+        reason = describe_reason(amount.rejection_reason)
+        if reason is not None:
+            # Пояснение — второстепенное: показывается мельче основного
+            # текста, насколько это позволяет Telegram.
+            lines.append(f"<i>({escape(reason)})</i>")
+        return lines
 
     def _amount_details(self, snapshot: ConfirmationSnapshot, amount: AmountSnapshot) -> list[str]:
         """Разбивка одной суммы для кнопки ``об`` (§44-45)."""
@@ -163,3 +259,70 @@ class MessageFormatter:
         """Округление только для отображения (``15_NOTIFICATION_SYSTEM.md`` §49-50)."""
         quantum = Decimal(1).scaleb(-self._config.decimal_places)
         return f"{value.quantize(quantum)}"
+
+
+@dataclass(frozen=True, slots=True)
+class _Highlights:
+    """Суммы, выигравшие по доходности и по прибыли.
+
+    Это два разных вопроса: какая сумма выгоднее в процентах и какая
+    приносит больше денег. Часто они не совпадают, и оператору важны обе.
+    """
+
+    best_roi: AmountSnapshot | None = None
+    best_profit: AmountSnapshot | None = None
+
+
+def _highlights(amounts: tuple[AmountSnapshot, ...]) -> _Highlights:
+    """Найти лучшую по проценту и лучшую по прибыли.
+
+    Сравниваются все суммы, включая неподтверждённые: пометка сообщает о
+    величине результата, а не о его статусе. При равенстве отмечается
+    большая сумма — выбор детерминирован и не зависит от порядка.
+    """
+    def roi(item: AmountSnapshot) -> Decimal | None:
+        return None if item.net_roi is None else item.net_roi.value
+
+    return _Highlights(
+        best_roi=_leader(amounts, roi),
+        best_profit=_leader(amounts, lambda item: item.net_profit),
+    )
+
+
+def _leader(
+    amounts: tuple[AmountSnapshot, ...],
+    value: Callable[[AmountSnapshot], Decimal | None],
+) -> AmountSnapshot | None:
+    """Сумма с наибольшим значением; при равенстве — большая из сумм."""
+    best: AmountSnapshot | None = None
+    best_value: Decimal | None = None
+    for amount in amounts:
+        current = value(amount)
+        if current is None:
+            continue
+        if best_value is None or current > best_value:
+            best, best_value = amount, current
+        elif current == best_value and best is not None:
+            if amount.input_amount.as_decimal > best.input_amount.as_decimal:
+                best = amount
+    return best
+
+
+def _amount_label(amount: AmountSnapshot) -> str:
+    """Сумма без лишних нулей: ``50``, а не ``50.00``."""
+    value = amount.input_amount.as_decimal
+    normalized = value.normalize()
+    if normalized == normalized.to_integral_value():
+        return str(normalized.quantize(Decimal(1)))
+    return f"{normalized:f}"
+
+
+def _signed(value: Decimal | None, *, suffix: str) -> str:
+    """Значение со знаком и двумя знаками после запятой.
+
+    Неизвестное значение не превращается в ноль (``CLAUDE.md`` §12):
+    вместо числа показывается прочерк.
+    """
+    if value is None:
+        return f"—{suffix}"
+    return f"{value:+.{_MONEY_PLACES}f}{suffix}"

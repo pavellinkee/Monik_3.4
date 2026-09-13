@@ -57,6 +57,10 @@ class OutgoingMessage:
 
     destination: NotificationDestination
     text: str
+    #: Разметка текста, если она нужна именно этому сообщению. ``None`` —
+    #: обычный текст. Указывается сообщением, а не транспортом: решение о
+    #: разметке принимает тот, кто текст составил.
+    parse_mode: str | None = None
     details_callback: str | None = None
     details_label: str | None = None
     buttons: tuple[tuple[MessageButton, ...], ...] = ()

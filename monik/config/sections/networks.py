@@ -27,6 +27,8 @@ class NetworkConfig(ConfigSection):
     native_token_decimals: int = Field(default=18, ge=0, le=36)
     wrapped_native_address: TokenAddress
     rpc_url: str | None = Field(default=None, max_length=512)
+    #: Значок сети в уведомлении. Свойство сети, а не формата сообщения.
+    emoji: str | None = Field(default=None, min_length=1, max_length=8)
     enabled: bool = True
 
     @model_validator(mode="after")
